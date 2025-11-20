@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CPU Scheduling Simulator with Hypervisor</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <!-- Animated Background -->
+    <div class="animated-bg">
+        <div class="gradient-orb orb-1"></div>
+        <div class="gradient-orb orb-2"></div>
+        <div class="gradient-orb orb-3"></div>
+    </div>
+
+    <div class="container">
+        <!-- Enhanced Header with Animation -->
+        <div class="header-wrapper">
+            <div class="header-icon">⚙️</div>
+            <h1>CPU Scheduling Simulator</h1>
+            <p class="subtitle">with Hypervisor & Multi-Level Queue Management</p>
+        </div>
+
+        <!-- Enhanced Tabs with Icons -->
+        <div class="tabs">
+            <button class="tab active" data-tab="vm">
+                <span class="tab-icon">🖥️</span>
+                <span class="tab-text">Virtual Machines</span>
+            </button>
+            <button class="tab" data-tab="process">
+                <span class="tab-icon">📋</span>
+                <span class="tab-text">Processes</span>
+            </button>
+            <button class="tab" data-tab="simulate">
+                <span class="tab-icon">▶️</span>
+                <span class="tab-text">Simulate</span>
+            </button>
+            <button class="tab" data-tab="monitor">
+                <span class="tab-icon">📊</span>
+                <span class="tab-text">Resource Monitor</span>
+            </button>
+        </div>
+
+        <!-- VM Management Tab -->
+        <div id="vm-tab" class="tab-content active">
+            <div class="section-header">
+                <h3>🖥️ Add Virtual Machine</h3>
+                <div class="section-badge">Configure VM Resources</div>
+            </div>
+
+            <div class="info-box">
+                <div class="info-icon">💡</div>
+                <div class="info-content">
+                    <strong>Virtual Machine Configuration</strong>
+                    <p>Create virtual machines with advanced resource allocation. Each VM can have CPU limits, memory
+                        allocation, and I/O priorities.</p>
+                </div>
+            </div>
+
+            <form id="vmForm">
+                <div class="inputs">
+                    <div class="input-group">
+                        <label>VM Name</label>
+                        <input type="text" id="vmName" placeholder="e.g., VM1" required>
+                    </div>
+                    <div class="input-group">
+                        <label>Priority (1-10)</label>
+                        <input type="number" id="vmPriority" placeholder="5" value="5" min="1" max="10">
+                    </div>
+                    <div class="input-group">
+                        <label>CPU Share %</label>
+                        <input type="number" id="vmCPUShare" placeholder="25" value="25" min="1" max="100">
+                    </div>
+                    <div class="input-group">
+                        <label>Memory (MB)</label>
+                        <input type="number" id="vmMemory" placeholder="512" value="512" min="128" max="8192">
+                    </div>
+                    <div class="input-group">
+                        <label>VM Type</label>
+                        <select id="vmType">
+                            <option value="standard">🔷 Standard VM</option>
+                            <option value="compute">⚡ Compute Optimized</option>
+                            <option value="memory">💾 Memory Optimized</option>
+                            <option value="realtime">⏱️ Real-time VM</option>
+                        </select>
+                    </div>
+                    <button type="submit" id="addVM" class="btn-primary">
+                        <span class="btn-icon">➕</span>
+                        <span>Add VM</span>
+                    </button>
+                </div>
+            </form>
+
+            <div class="section-header">
+                <h3>📊 Virtual Machines List</h3>
+                <div class="vm-count" id="vmCount">0 VMs</div>
+            </div>
+
+            <div class="table-wrapper">
+                <table id="vmTable">
+                    <thead>
+                        <tr>
+                            <th>VM Name</th>
+                            <th>Type</th>
+                            <th>Priority</th>
+                            <th>CPU Share</th>
+                            <th>Memory</th>
+                            <th>Processes</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr class="empty-state">
+                            <td colspan="8">
+                                <div class="empty-content">
+                                    <div class="empty-icon">🖥️</div>
+                                    <p>No virtual machines added yet</p>
+                                    <span>Add your first VM above to get started</span>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="btn-group">
+                <button id="loadSampleVMsBtn" class="btn-secondary">
+                    <span class="btn-icon">📦</span>
+                    <span>Load Sample VMs</span>
+                </button>
+                <button id="loadBalancedVMsBtn" class="btn-secondary">
+                    <span class="btn-icon">⚖️</span>
+                    <span>Load Balanced Setup</span>
+                </button>
+                <button id="clearAllVMsBtn" class="btn-danger">
+                    <span class="btn-icon">🗑️</span>
+                    <span>Clear All VMs</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Process Management Tab -->
+        <div id="process-tab" class="tab-content">
+            <div class="section-header">
+                <h3>📋 Add Process</h3>
+                <div class="section-badge">Configure Process Attributes</div>
+            </div>
+
+            <div class="auto-process-control">
+                <label class="toggle-label">
+                    <input type="checkbox" id="autoProcessToggle">
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-text">🤖 Auto-Generate Processes (Every 5 seconds)</span>
+                </label>
+                <div id="autoProcessStatus" class="auto-status" style="display: none;">
+                    ⏱️ Next process in: <span id="countdown">5</span>s
+                </div>
+            </div>
+
+            <div class="info-box">
+                <div class="info-icon">💡</div>
+                <div class="info-content">
+                    <strong>Process Configuration</strong>
+                    <p>Add processes with advanced attributes including I/O bursts, CPU affinity, and memory
+                        requirements.</p>
+                </div>
+            </div>
+
+            <form id="processForm">
+                <div class="inputs">
+                    <div class="input-group">
+                        <label>Process ID</label>
+                        <input type="text" id="pid" placeholder="e.g., P1" required>
+                    </div>
+                    <div class="input-group">
+                        <label>Arrival Time</label>
+                        <input type="number" id="arrival" placeholder="0" required min="0">
+                    </div>
+                    <div class="input-group">
+                        <label>CPU Burst Time</label>
+                        <input type="number" id="burst" placeholder="5" required min="1">
+                    </div>
+                    <div class="input-group">
+                        <label>Priority (1-10)</label>
+                        <input type="number" id="priority" placeholder="5" min="1" max="10">
+                    </div>
+                    <div class="input-group">
+                        <label>I/O Time</label>
+                        <input type="number" id="ioTime" placeholder="0" min="0" value="0">
+                    </div>
+                    <div class="input-group">
+                        <label>Memory (MB)</label>
+                        <input type="number" id="memReq" placeholder="64" min="1" value="64">
+                    </div>
+                    <div class="input-group">
+                        <label>Assigned VM</label>
+                        <select id="vmAssignment">
+                            <option value="">🏠 Host (No VM)</option>
+                        </select>
+                    </div>
+                    <button type="submit" id="addProcess" class="btn-primary">
+                        <span class="btn-icon">➕</span>
+                        <span>Add Process</span>
+                    </button>
+                </div>
+            </form>
+
+            <div class="section-header">
+                <h3>📊 Process List</h3>
+                <div class="process-count" id="processCount">0 Processes</div>
+            </div>
+
+            <div class="table-wrapper">
+                <table id="processTable">
+                    <thead>
+                        <tr>
+                            <th>Process</th>
+                            <th>Arrival</th>
+                            <th>CPU Burst</th>
+                            <th>I/O Time</th>
+                            <th>Priority</th>
+                            <th>Memory</th>
+                            <th>Assigned VM</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr class="empty-state">
+                            <td colspan="8">
+                                <div class="empty-content">
+                                    <div class="empty-icon">📋</div>
+                                    <p>No processes added yet</p>
+                                    <span>Add your first process above to get started</span>
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="btn-group">
+                <button id="loadSampleProcessesBtn" class="btn-secondary">
+                    <span class="btn-icon">📦</span>
+                    <span>Load Sample</span>
+                </button>
+                <button id="loadIOIntensiveBtn" class="btn-secondary">
+                    <span class="btn-icon">💾</span>
+                    <span>I/O Intensive</span>
+                </button>
+                <button id="loadCPUIntensiveBtn" class="btn-secondary">
+                    <span class="btn-icon">⚡</span>
+                    <span>CPU Intensive</span>
+                </button>
+                <button id="clearAllProcessesBtn" class="btn-danger">
+                    <span class="btn-icon">🗑️</span>
+                    <span>Clear All</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Simulation Tab -->
+        <div id="simulate-tab" class="tab-content">
+            <div class="section-header">
+                <h3>⚙️ Simulation Settings</h3>
+                <div class="section-badge">Configure Scheduler</div>
+            </div>
+
+            <div class="hypervisor-mode">
+                <label class="toggle-label">
+                    <input type="checkbox" id="hypervisorMode">
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-text">Enable Hypervisor Mode (VM-Level Scheduling)</span>
+                </label>
+            </div>
+
+            <div class="settings-grid">
+                <div class="input-group">
+                    <label>Process Scheduling Algorithm</label>
+                    <select id="algorithm" required>
+                        <option value="">Select Algorithm</option>
+                        <option value="FCFS">FCFS (First Come First Serve)</option>
+                        <option value="SJF">SJF (Shortest Job First)</option>
+                        <option value="SRTF">SRTF (Shortest Remaining Time First)</option>
+                        <option value="PRIORITY">Priority Scheduling</option>
+                        <option value="RR">Round Robin</option>
+                        <option value="MLFQ">Multi-Level Feedback Queue</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label>Time Quantum (for RR)</label>
+                    <input type="number" id="quantum" placeholder="2" value="2" min="1">
+                </div>
+            </div>
+
+            <div class="settings-grid" id="hypervisorSettings" style="display:none">
+                <div class="input-group">
+                    <label>VM Scheduler</label>
+                    <select id="vmScheduler">
+                        <option value="RR">Round Robin</option>
+                        <option value="PRIORITY">Priority-Based</option>
+                        <option value="PROPORTIONAL">Proportional Share</option>
+                        <option value="CREDIT">Credit-Based</option>
+                        <option value="LOTTERY">Lottery Scheduling</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label>VM Time Slice</label>
+                    <input type="number" id="vmQuantum" placeholder="10" value="10" min="1">
+                </div>
+            </div>
+
+            <div class="advanced-settings">
+                <h4>🔧 Advanced Hypervisor Features</h4>
+                <div class="checkbox-grid">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="enableMigration">
+                        <span class="checkmark"></span>
+                        <span>Enable VM Migration</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="enableOvercommit">
+                        <span class="checkmark"></span>
+                        <span>Enable Resource Overcommit</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="enableIOScheduling">
+                        <span class="checkmark"></span>
+                        <span>Enable I/O Scheduling</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="enableCaching">
+                        <span class="checkmark"></span>
+                        <span>Enable CPU Caching</span>
+                    </label>
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-container">
+                        <label>Context Switch Overhead: <span class="slider-value" id="csOverheadValue">1</span> time
+                            units</label>
+                        <input type="range" id="contextSwitchOverhead" min="0" max="5" value="1" step="0.5">
+                    </div>
+
+                    <div class="slider-container">
+                        <label>Migration Penalty: <span class="slider-value" id="migrationValue">5</span> time
+                            units</label>
+                        <input type="range" id="migrationPenalty" min="0" max="20" value="5" step="1">
+                    </div>
+                </div>
+            </div>
+
+            <button class="btn-simulate" id="runSimulationBtn">
+                <span class="btn-icon">🚀</span>
+                <span>Run Simulation</span>
+                <span class="btn-glow"></span>
+            </button>
+
+            <div class="results" id="results" style="display:none">
+                <div class="section-header">
+                    <h3>📊 Gantt Chart</h3>
+                    <div class="section-badge">Timeline Visualization</div>
+                </div>
+                <div class="chart-wrapper">
+                    <canvas id="ganttChart"></canvas>
+                </div>
+                <div id="legend" class="legend"></div>
+
+                <div class="section-header">
+                    <h3>📋 Scheduling Results</h3>
+                    <div class="section-badge">Process Metrics</div>
+                </div>
+                <div class="table-wrapper">
+                    <table id="resultTable">
+                        <thead>
+                            <tr>
+                                <th>Process</th>
+                                <th>VM</th>
+                                <th>Arrival</th>
+                                <th>Burst</th>
+                                <th>Completion</th>
+                                <th>Turnaround</th>
+                                <th>Waiting</th>
+                                <th>Response</th>
+                                <th>Context Switches</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+
+                <div id="averages"></div>
+                <div id="vmStats"></div>
+            </div>
+        </div>
+
+        <!-- Resource Monitor Tab -->
+        <div id="monitor-tab" class="tab-content">
+            <div class="section-header">
+                <h3>📊 Resource Monitor</h3>
+                <div class="section-badge">Real-time Metrics</div>
+            </div>
+
+            <div class="info-box">
+                <div class="info-icon">💡</div>
+                <div class="info-content">
+                    <strong>Resource Visualization</strong>
+                    <p>Real-time visualization of CPU, memory, and I/O utilization across VMs</p>
+                </div>
+            </div>
+
+            <div id="resourceMonitor" class="resource-monitor">
+                <div class="monitor-placeholder">
+                    <div class="placeholder-icon">📊</div>
+                    <p>Run a simulation to see resource utilization</p>
+                    <span>Switch to the Simulate tab and run a simulation</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="text/javascript" charset="utf-8" src="script.js"></script>
+</body>
+
+</html>
