@@ -1,0 +1,24 @@
+# Impeccable design-tool scratch and review captures (design.json is kept)
+.impeccable/review/
+.impeccable/mocks/
+.impeccable/build/
+.impeccable/config.local.json
+
+# Local Claude Code / preview config
+.claude/
+
+# OS and editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.log
+*.swp
+
+# PHP local env
+.env
+.env.*
+.impeccable/
+PRODUCT.md
+DESIGN.md
