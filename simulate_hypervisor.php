@@ -1,606 +1,379 @@
 <?php
-error_reporting(E_ERROR | E_PARSE);
-header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: POST');
-header('Access-Control-Allow-Headers: Content-Type');
+require __DIR__ . '/common.php';
 
-$raw = file_get_contents("php://input");
-$input = json_decode($raw, true);
-if (!$input) {
-    echo json_encode(['error' => 'Invalid input']);
-    exit;
-}
+const ALGORITHMS = ['FCFS', 'SJF', 'SRTF', 'PRIORITY', 'RR', 'MLFQ'];
+const VM_SCHEDULERS = ['RR', 'PRIORITY', 'PROPORTIONAL', 'CREDIT', 'LOTTERY'];
+const VM_TYPES = ['standard', 'compute', 'memory', 'realtime'];
+const TOTAL_SYSTEM_MEMORY = 8192; // MB of physical memory shared by all VMs
+const CACHE_SIZE = 8;
+const CACHE_MISS_PENALTY = 2;
+const PAGING_PENALTY = 1;
+const MIGRATION_IMBALANCE = 3; // migrate when a VM has this many more ready processes than another
 
-$processAlgo = $input['processAlgo'] ?? 'FCFS';
-$processQuantum = isset($input['processQuantum']) ? intval($input['processQuantum']) : 2;
-$processes = $input['processes'] ?? [];
-$vms = $input['vms'] ?? [];
-$vmScheduler = $input['vmScheduler'] ?? 'RR';
-$vmQuantum = isset($input['vmQuantum']) ? intval($input['vmQuantum']) : 10;
-$csOverhead = isset($input['csOverhead']) ? floatval($input['csOverhead']) : 0;
-$enableMigration = $input['enableMigration'] ?? false;
-$enableOvercommit = $input['enableOvercommit'] ?? false;
-$enableIOScheduling = $input['enableIOScheduling'] ?? false;
-$enableCaching = $input['enableCaching'] ?? false;
-$migrationPenalty = isset($input['migrationPenalty']) ? intval($input['migrationPenalty']) : 5;
+$input = read_input();
+$processAlgo = enum_field($input['processAlgo'] ?? null, 'processAlgo', ALGORITHMS, 'FCFS');
+$processQuantum = int_field($input['processQuantum'] ?? null, 'processQuantum', 1, MAX_QUANTUM, 2);
+$vmScheduler = enum_field($input['vmScheduler'] ?? null, 'vmScheduler', VM_SCHEDULERS, 'RR');
+$vmQuantum = int_field($input['vmQuantum'] ?? null, 'vmQuantum', 1, MAX_QUANTUM, 10);
+$csOverhead = overhead_field($input['csOverhead'] ?? null);
+$migrationPenalty = int_field($input['migrationPenalty'] ?? null, 'migrationPenalty', 0, 100, 5);
+$seed = int_field($input['seed'] ?? null, 'seed', 0, 2147483647, 42);
+$features = [
+    'migration' => bool_field($input['enableMigration'] ?? false),
+    'overcommit' => bool_field($input['enableOvercommit'] ?? false),
+    'ioScheduling' => bool_field($input['enableIOScheduling'] ?? false),
+    'caching' => bool_field($input['enableCaching'] ?? false),
+];
+$processes = validate_processes($input['processes'] ?? null);
+$vms = validate_vms($input['vms'] ?? [], $processes);
 
-if (empty($processes)) {
-    echo json_encode(['error' => 'No processes provided']);
-    exit;
-}
-
-// Sort processes by arrival time
-usort($processes, fn($a, $b) => ($a['arrival'] ?? 0) <=> ($b['arrival'] ?? 0));
-
-// ============================================
-// ADVANCED HYPERVISOR FEATURES
-// ============================================
-
-// 1. VM LIVE MIGRATION
-function migrate_process($process, $fromVM, $toVM, $time, $penalty)
+function validate_vms($list, $processes)
 {
-    return [
-        'process' => $process['pid'],
-        'fromVM' => $fromVM,
-        'toVM' => $toVM,
-        'time' => $time,
-        'penalty' => $penalty
-    ];
-}
-
-// 2. LOAD BALANCING
-function calculate_vm_load($vmName, $processes, $time)
-{
-    $activeProcs = array_filter($processes, function ($p) use ($vmName, $time) {
-        return ($p['vm'] ?? 'Host') === $vmName &&
-            $p['arrival'] <= $time &&
-            ($p['remaining'] ?? $p['burst']) > 0;
-    });
-
-    $cpuLoad = array_sum(array_map(fn($p) => $p['remaining'] ?? $p['burst'], $activeProcs));
-    $memoryLoad = array_sum(array_map(fn($p) => $p['memReq'] ?? 64, $activeProcs));
-
-    return [
-        'cpu' => $cpuLoad,
-        'memory' => $memoryLoad,
-        'processCount' => count($activeProcs)
-    ];
-}
-
-// 3. RESOURCE OVERCOMMITMENT
-function check_overcommit($vm, $totalMemoryUsed, $totalCPUUsed)
-{
-    $memoryLimit = $vm['memory'] ?? 512;
-    $cpuLimit = ($vm['cpuShare'] ?? 25) / 100;
-
-    return [
-        'memoryOvercommit' => $totalMemoryUsed > $memoryLimit,
-        'cpuOvercommit' => $totalCPUUsed > $cpuLimit,
-        'memoryRatio' => $totalMemoryUsed / $memoryLimit,
-        'cpuRatio' => $totalCPUUsed / $cpuLimit
-    ];
-}
-
-// 4. CPU AFFINITY & PINNING
-function assign_cpu_affinity($process, $vm)
-{
-    // Assign processes to specific virtual CPUs based on type
-    $vmType = $vm['type'] ?? 'standard';
-
-    if ($vmType === 'compute' || $vmType === 'realtime') {
-        return ['affinity' => 'dedicated', 'vcpu' => 0];
-    } elseif (($process['ioTime'] ?? 0) > 0) {
-        return ['affinity' => 'io-optimized', 'vcpu' => 1];
-    } else {
-        return ['affinity' => 'shared', 'vcpu' => -1];
+    if (!is_array($list) || !array_is_list($list)) {
+        fail(400, 'vms must be an array');
     }
-}
+    if (count($list) > MAX_VMS) {
+        fail(400, 'At most ' . MAX_VMS . ' VMs are allowed');
+    }
 
-// 5. MEMORY BALLOONING
-function apply_memory_ballooning($vms, $processes)
-{
-    $totalSystemMemory = 8192; // 8GB total
-    $allocatedMemory = array_sum(array_map(fn($v) => $v['memory'], $vms));
+    $vms = [];
+    foreach ($list as $i => $v) {
+        if (!is_array($v)) {
+            fail(400, "vms[$i] must be an object");
+        }
+        $name = name_field($v['name'] ?? null, "vms[$i].name");
+        if ($name === 'Host' || isset($vms[$name])) {
+            fail(400, "Duplicate or reserved VM name: $name");
+        }
+        $type = $v['type'] ?? 'standard';
+        if (!in_array($type, VM_TYPES, true)) {
+            fail(400, "$name.type must be one of: " . implode(', ', VM_TYPES));
+        }
+        $vms[$name] = [
+            'name' => $name,
+            'priority' => int_field($v['priority'] ?? null, "$name.priority", 1, 10, 5),
+            'cpuShare' => int_field($v['cpuShare'] ?? null, "$name.cpuShare", 1, 100, 25),
+            'memory' => int_field($v['memory'] ?? null, "$name.memory", 128, 65536, 512),
+            'type' => $type,
+        ];
+    }
 
-    if ($allocatedMemory > $totalSystemMemory) {
-        $ratio = $totalSystemMemory / $allocatedMemory;
-        foreach ($vms as &$vm) {
-            $vm['actualMemory'] = floor($vm['memory'] * $ratio);
-            $vm['balloonedMemory'] = $vm['memory'] - $vm['actualMemory'];
+    $usesHost = false;
+    foreach ($processes as $p) {
+        if ($p['vm'] === 'Host') {
+            $usesHost = true;
+        } elseif (!isset($vms[$p['vm']])) {
+            fail(400, "Process {$p['pid']} is assigned to unknown VM {$p['vm']}");
         }
     }
-
+    if ($usesHost) {
+        $vms['Host'] = ['name' => 'Host', 'priority' => 0, 'cpuShare' => 100, 'memory' => 4096, 'type' => 'standard'];
+    }
     return $vms;
 }
 
-// 6. I/O SCHEDULING with priorities
-function schedule_io_operations($processes, $time)
+// Informational only: which vCPU class a process would be pinned to.
+function cpu_affinity($process, $vm)
 {
-    $ioOperations = [];
-
-    foreach ($processes as $p) {
-        if (($p['ioTime'] ?? 0) > 0 && isset($p['ioStartTime'])) {
-            $ioOperations[] = [
-                'pid' => $p['pid'],
-                'vm' => $p['vm'],
-                'ioTime' => $p['ioTime'],
-                'priority' => $p['priority'] ?? 5,
-                'startTime' => $p['ioStartTime']
-            ];
-        }
+    if ($vm['type'] === 'compute' || $vm['type'] === 'realtime') {
+        return ['affinity' => 'dedicated', 'vcpu' => 0];
     }
-
-    // Sort by priority (lower number = higher priority)
-    usort($ioOperations, fn($a, $b) => $a['priority'] <=> $b['priority']);
-
-    return $ioOperations;
+    if ($process['ioTime'] > 0) {
+        return ['affinity' => 'io-optimized', 'vcpu' => 1];
+    }
+    return ['affinity' => 'shared', 'vcpu' => -1];
 }
 
-// 7. CPU CACHING SIMULATION
+// LRU cache of recently run (vm, pid) working sets.
 class CPUCache
 {
     private $cache = [];
-    private $cacheSize = 8;
-    private $hits = 0;
-    private $misses = 0;
+    public $hits = 0;
+    public $misses = 0;
 
     public function access($pid, $vm)
     {
         $key = "$vm:$pid";
-
-        if (isset($this->cache[$key])) {
-            $this->hits++;
-            // Move to end (LRU)
-            unset($this->cache[$key]);
-            $this->cache[$key] = true;
-            return ['hit' => true, 'penalty' => 0];
-        } else {
-            $this->misses++;
-
-            if (count($this->cache) >= $this->cacheSize) {
-                array_shift($this->cache);
-            }
-
-            $this->cache[$key] = true;
-            return ['hit' => false, 'penalty' => 2]; // Cache miss penalty
+        $hit = isset($this->cache[$key]);
+        unset($this->cache[$key]);
+        if (!$hit && count($this->cache) >= CACHE_SIZE) {
+            array_shift($this->cache);
         }
+        $this->cache[$key] = true;
+        $hit ? $this->hits++ : $this->misses++;
+        return $hit;
     }
 
-    public function getStats()
+    public function stats()
     {
         $total = $this->hits + $this->misses;
-        return [
-            'hits' => $this->hits,
-            'misses' => $this->misses,
-            'hitRate' => $total > 0 ? ($this->hits / $total) * 100 : 0
-        ];
+        return ['hits' => $this->hits, 'misses' => $this->misses, 'hitRate' => $total ? $this->hits / $total * 100 : 0];
     }
 }
 
-// 8. CREDIT-BASED SCHEDULING
-function credit_scheduler($vms, $time)
+function hypervisor_schedule($vms, $processes, $processAlgo, $processQuantum, $vmScheduler, $vmQuantum,
+                             $csOverhead, $migrationPenalty, $seed, $features)
 {
-    static $credits = [];
-
-    // Initialize credits
-    foreach ($vms as $vm) {
-        if (!isset($credits[$vm['name']])) {
-            $credits[$vm['name']] = ($vm['cpuShare'] ?? 25) * 10;
-        }
-    }
-
-    // Find VM with highest credits
-    arsort($credits);
-    $selectedVM = array_key_first($credits);
-
-    // Deduct credits
-    if ($selectedVM) {
-        $credits[$selectedVM] -= 10;
-
-        // Replenish credits periodically
-        if ($time % 100 == 0) {
-            foreach ($vms as $vm) {
-                $credits[$vm['name']] += ($vm['cpuShare'] ?? 25) * 5;
-            }
-        }
-    }
-
-    return ['selectedVM' => $selectedVM, 'credits' => $credits];
-}
-
-// 9. LOTTERY SCHEDULING
-function lottery_scheduler($vms)
-{
-    $totalTickets = array_sum(array_map(fn($v) => $v['cpuShare'] ?? 25, $vms));
-    $winning = rand(1, $totalTickets);
-
-    $cumulative = 0;
-    foreach ($vms as $vm) {
-        $cumulative += ($vm['cpuShare'] ?? 25);
-        if ($winning <= $cumulative) {
-            return $vm['name'];
-        }
-    }
-
-    return $vms[0]['name'] ?? 'Host';
-}
-
-// 10. NUMA AWARENESS
-function numa_node_assignment($vm)
-{
-    static $numaNodes = [0, 1];
-    static $assignments = [];
-
-    if (!isset($assignments[$vm['name']])) {
-        // Assign based on VM type and priority
-        $node = ($vm['priority'] ?? 5) % 2;
-        $assignments[$vm['name']] = $node;
-    }
-
-    return [
-        'numaNode' => $assignments[$vm['name']],
-        'localMemory' => true,
-        'crossNodePenalty' => 0
-    ];
-}
-
-// ============================================
-// MAIN HYPERVISOR SCHEDULING LOGIC
-// ============================================
-
-function enhanced_hypervisor_schedule(
-    $vms,
-    $processes,
-    $vmScheduler,
-    $vmQuantum,
-    $processAlgo,
-    $processQuantum,
-    $csOverhead,
-    $enableMigration,
-    $enableOvercommit,
-    $enableIOScheduling,
-    $enableCaching,
-    $migrationPenalty
-) {
-
+    mt_srand($seed); // lottery draws are reproducible for the same input
+    $tl = new Timeline($processes, $csOverhead);
     $cache = new CPUCache();
-    $migrations = [];
-    $ioSchedule = [];
-    $vmStats = [];
-    $segments = [];
-    $time = 0;
+    $vmNames = array_keys($vms);
 
-    // Apply memory ballooning if overcommit is enabled
-    if ($enableOvercommit) {
-        $vms = apply_memory_ballooning($vms, $processes);
-    }
-
-    // Initialize process states
-    foreach ($processes as &$p) {
-        $p['remaining'] = $p['burst'];
-        $p['state'] = 'ready';
-        $p['firstExecution'] = -1;
-        $p['contextSwitches'] = 0;
-
-        // Assign CPU affinity
-        $vmData = array_filter($vms, fn($v) => $v['name'] === ($p['vm'] ?? 'Host'));
-        if (!empty($vmData)) {
-            $vm = reset($vmData);
-            $p['affinity'] = assign_cpu_affinity($p, $vm);
+    // Memory ballooning: when overcommitted, every VM is squeezed proportionally into physical memory.
+    $effectiveMemory = array_map(fn($v) => $v['memory'], $vms);
+    $allocated = array_sum($effectiveMemory);
+    if ($features['overcommit'] && $allocated > TOTAL_SYSTEM_MEMORY) {
+        foreach ($effectiveMemory as &$m) {
+            $m = (int)floor($m * TOTAL_SYSTEM_MEMORY / $allocated);
         }
+        unset($m);
     }
 
-    // Add host if needed
-    $hostProcs = array_filter($processes, fn($p) => empty($p['vm']) || $p['vm'] === 'Host');
-    if (!empty($hostProcs)) {
-        $vms[] = ['name' => 'Host', 'priority' => 0, 'cpuShare' => 100, 'memory' => 4096, 'type' => 'standard'];
+    $proc = [];
+    foreach ($processes as $p) {
+        $proc[$p['pid']] = $p;
     }
 
-    // Initialize VM stats
-    foreach ($vms as $vm) {
-        $vmStats[$vm['name']] = [
-            'vm' => $vm['name'],
+    $stats = [];
+    $credits = [];
+    foreach ($vmNames as $i => $name) {
+        $stats[$name] = [
+            'vm' => $name,
             'cpuTime' => 0,
             'idleTime' => 0,
             'processCount' => 0,
             'migrations' => 0,
             'memoryUsed' => 0,
+            'effectiveMemory' => $effectiveMemory[$name],
             'utilization' => 0,
             'ioOperations' => 0,
             'cacheHits' => 0,
             'cacheMisses' => 0,
-            'numaNode' => numa_node_assignment($vm)['numaNode'],
-            'overcommitEvents' => 0
+            'numaNode' => $i % 2,
+            'overcommitEvents' => 0,
         ];
+        $credits[$name] = $vms[$name]['cpuShare'];
     }
 
-    $completed = 0;
-    $totalProcesses = count($processes);
-    $lastVM = null;
+    $queues = array_fill_keys($vmNames, []); // ready pids per VM, in queue order
+    $current = [];                           // VM => pid holding the VM's CPU (non-preemptive algorithms)
+    $blocked = [];                           // pid => time its I/O completes
+    $ioDone = [];
+    $deviceFree = 0;
+    $ioSchedule = [];
+    $migrations = [];
+    $ranOn = [];
+    $rrPos = -1;
+    $n = count($processes);
+    $idx = 0;
+    $left = $n;
+    $nonPreemptive = in_array($processAlgo, ['FCFS', 'SJF', 'PRIORITY'], true);
+    $sliced = in_array($processAlgo, ['RR', 'MLFQ'], true);
 
-    // Main scheduling loop
-    while ($completed < $totalProcesses) {
-        // I/O Scheduling
-        if ($enableIOScheduling) {
-            $ioOps = schedule_io_operations($processes, $time);
-            if (!empty($ioOps)) {
-                $ioSchedule = array_merge($ioSchedule, $ioOps);
+    $admit = function () use (&$idx, &$queues, &$blocked, &$proc, $processes, $tl, $n) {
+        while ($idx < $n && $processes[$idx]['arrival'] <= $tl->time) {
+            $pid = $processes[$idx++]['pid'];
+            $queues[$proc[$pid]['vm']][] = $pid;
+        }
+        asort($blocked);
+        foreach ($blocked as $pid => $until) {
+            if ($until > $tl->time) {
+                break;
             }
+            unset($blocked[$pid]);
+            $queues[$proc[$pid]['vm']][] = $pid;
+        }
+    };
+    $dequeue = function ($vm, $pid) use (&$queues) {
+        $queues[$vm] = array_values(array_diff($queues[$vm], [$pid]));
+    };
+
+    while ($left) {
+        $admit();
+        $ready = array_values(array_filter($vmNames, fn($v) => $queues[$v]));
+
+        if (!$ready) {
+            $next = $blocked ? min($blocked) : INF;
+            if ($idx < $n) {
+                $next = min($next, $processes[$idx]['arrival']);
+            }
+            $tl->idleUntil($next);
+            continue;
         }
 
-        // VM Scheduler Selection
-        $selectedVM = null;
-
+        // --- VM level: choose which VM gets the CPU for the next slice ---
         switch ($vmScheduler) {
-            case 'CREDIT':
-                $result = credit_scheduler($vms, $time);
-                $selectedVM = $result['selectedVM'];
+            case 'PRIORITY': // lower number = higher priority
+                usort($ready, fn($a, $b) => $vms[$a]['priority'] <=> $vms[$b]['priority']);
+                $vm = $ready[0];
                 break;
-
-            case 'LOTTERY':
-                $selectedVM = lottery_scheduler($vms);
+            case 'PROPORTIONAL': // least CPU time received relative to its share
+                usort($ready, fn($a, $b) => $stats[$a]['cpuTime'] / $vms[$a]['cpuShare'] <=> $stats[$b]['cpuTime'] / $vms[$b]['cpuShare']);
+                $vm = $ready[0];
                 break;
-
-            case 'PRIORITY':
-                $activeVMs = array_filter($vms, function ($vm) use ($processes, $time) {
-                    $vmProcs = array_filter(
-                        $processes,
-                        fn($p) => ($p['vm'] ?? 'Host') === $vm['name'] &&
-                            $p['arrival'] <= $time &&
-                            ($p['remaining'] ?? 0) > 0
-                    );
-                    return !empty($vmProcs);
-                });
-
-                if (!empty($activeVMs)) {
-                    usort($activeVMs, fn($a, $b) => ($a['priority'] ?? 0) <=> ($b['priority'] ?? 0));
-                    $selectedVM = $activeVMs[0]['name'];
+            case 'CREDIT': // spend credits while running; refill everyone when ready VMs run dry
+                while (max(array_map(fn($v) => $credits[$v], $ready)) <= 0) {
+                    foreach ($vmNames as $v) {
+                        $credits[$v] = min($credits[$v] + $vms[$v]['cpuShare'], $vms[$v]['cpuShare']);
+                    }
                 }
+                usort($ready, fn($a, $b) => $credits[$b] <=> $credits[$a]);
+                $vm = $ready[0];
                 break;
-
-            case 'PROPORTIONAL':
-            case 'RR':
-            default:
-                // Round-robin through active VMs
-                foreach ($vms as $vm) {
-                    $vmProcs = array_filter(
-                        $processes,
-                        fn($p) => ($p['vm'] ?? 'Host') === $vm['name'] &&
-                            $p['arrival'] <= $time &&
-                            ($p['remaining'] ?? 0) > 0
-                    );
-                    if (!empty($vmProcs)) {
-                        $selectedVM = $vm['name'];
+            case 'LOTTERY': // tickets = CPU share
+                $draw = mt_rand(1, array_sum(array_map(fn($v) => $vms[$v]['cpuShare'], $ready)));
+                foreach ($ready as $vm) {
+                    $draw -= $vms[$vm]['cpuShare'];
+                    if ($draw <= 0) {
                         break;
                     }
                 }
                 break;
-        }
-
-        if (!$selectedVM) {
-            // No VM has ready processes, advance time
-            $nextArrival = PHP_INT_MAX;
-            foreach ($processes as $p) {
-                if (($p['remaining'] ?? 0) > 0 && $p['arrival'] > $time) {
-                    $nextArrival = min($nextArrival, $p['arrival']);
-                }
-            }
-
-            if ($nextArrival < PHP_INT_MAX) {
-                $segments[] = ['pid' => 'IDLE', 'start' => $time, 'end' => $nextArrival, 'vm' => 'System'];
-                $time = $nextArrival;
-            } else {
-                break;
-            }
-            continue;
-        }
-
-        // Get processes for selected VM
-        $vmProcesses = array_filter(
-            $processes,
-            fn($p) => ($p['vm'] ?? 'Host') === $selectedVM &&
-                $p['arrival'] <= $time &&
-                ($p['remaining'] ?? 0) > 0
-        );
-
-        if (empty($vmProcesses)) {
-            continue;
-        }
-
-        // Load balancing and migration
-        if ($enableMigration && count($vmProcesses) > 5) {
-            $targetVM = null;
-            $minLoad = PHP_INT_MAX;
-
-            foreach ($vms as $vm) {
-                if ($vm['name'] !== $selectedVM) {
-                    $load = calculate_vm_load($vm['name'], $processes, $time);
-                    if ($load['processCount'] < $minLoad) {
-                        $minLoad = $load['processCount'];
-                        $targetVM = $vm['name'];
-                    }
-                }
-            }
-
-            if ($targetVM && $minLoad < count($vmProcesses) - 2) {
-                // Migrate one process
-                $processToMigrate = reset($vmProcesses);
-                $migration = migrate_process($processToMigrate, $selectedVM, $targetVM, $time, $migrationPenalty);
-                $migrations[] = $migration;
-
-                // Update process VM assignment
-                foreach ($processes as &$p) {
-                    if ($p['pid'] === $processToMigrate['pid']) {
-                        $p['vm'] = $targetVM;
-                        $vmStats[$selectedVM]['migrations']++;
+            default: // RR: next VM after the previous one, in VM list order
+                $count = count($vmNames);
+                for ($i = 1; $i <= $count; $i++) {
+                    $pos = ($rrPos + $i) % $count;
+                    if ($queues[$vmNames[$pos]]) {
+                        $vm = $vmNames[$pos];
+                        $rrPos = $pos;
                         break;
                     }
                 }
+        }
 
-                // Add migration penalty
-                $migrationLabel = $migration['fromVM'] . '→' . $migration['toVM'];
-                $segments[] = ['pid' => 'MIGRATION', 'start' => $time, 'end' => $time + $migrationPenalty, 'vm' => $migrationLabel];
-                $time += $migrationPenalty;
+        // --- Load balancing: move one waiting process to the least loaded guest VM ---
+        if ($features['migration'] && $vm !== 'Host') {
+            $target = null;
+            foreach ($vmNames as $v) {
+                if ($v !== $vm && $v !== 'Host' && ($target === null || count($queues[$v]) < count($queues[$target]))) {
+                    $target = $v;
+                }
+            }
+            if ($target !== null && count($queues[$vm]) - count($queues[$target]) >= MIGRATION_IMBALANCE) {
+                $movable = array_values(array_diff($queues[$vm], [$current[$vm] ?? null]));
+                $pid = end($movable);
+                $dequeue($vm, $pid);
+                $queues[$target][] = $pid;
+                $proc[$pid]['vm'] = $target;
+                $stats[$vm]['migrations']++;
+                $migrations[] = ['process' => $pid, 'fromVM' => $vm, 'toVM' => $target, 'time' => $tl->time, 'penalty' => $migrationPenalty];
+                $tl->penalty('MIGRATION', $migrationPenalty, "$vm→$target");
                 continue;
             }
         }
 
-        // Check for overcommit
-        if ($enableOvercommit) {
-            $vmData = array_filter($vms, fn($v) => $v['name'] === $selectedVM);
-            $vm = reset($vmData);
-
-            $totalMem = array_sum(array_map(fn($p) => $p['memReq'] ?? 64, $vmProcesses));
-            $totalCPU = count($vmProcesses);
-
-            $overcommit = check_overcommit($vm, $totalMem, $totalCPU);
-            if ($overcommit['memoryOvercommit'] || $overcommit['cpuOvercommit']) {
-                $vmStats[$selectedVM]['overcommitEvents']++;
-            }
-        }
-
-        // Select process based on process algorithm
-        $selectedProcess = null;
-
-        switch (strtoupper($processAlgo)) {
-            case 'SJF':
-            case 'SRTF':
-                usort($vmProcesses, fn($a, $b) => ($a['remaining'] ?? $a['burst']) <=> ($b['remaining'] ?? $b['burst']));
-                $selectedProcess = reset($vmProcesses);
-                break;
-
-            case 'PRIORITY':
-                usort($vmProcesses, fn($a, $b) => ($a['priority'] ?? 5) <=> ($b['priority'] ?? 5));
-                $selectedProcess = reset($vmProcesses);
-                break;
-
-            case 'FCFS':
-            case 'RR':
-            case 'MLFQ':
-            default:
-                $selectedProcess = reset($vmProcesses);
-                break;
-        }
-
-        if (!$selectedProcess) {
-            continue;
-        }
-
-        // Apply CPU caching if enabled
-        $cachePenalty = 0;
-        if ($enableCaching) {
-            $cacheResult = $cache->access($selectedProcess['pid'], $selectedVM);
-            if ($cacheResult['hit']) {
-                $vmStats[$selectedVM]['cacheHits']++;
+        // --- Process level: run the VM's processes for up to vmQuantum time units ---
+        $budget = $vmQuantum;
+        while ($budget > 0 && $queues[$vm]) {
+            $queue = $queues[$vm];
+            if ($nonPreemptive && isset($current[$vm]) && in_array($current[$vm], $queue, true)) {
+                $pid = $current[$vm];
             } else {
-                $vmStats[$selectedVM]['cacheMisses']++;
-                $cachePenalty = $cacheResult['penalty'];
-            }
-        }
-
-        // Execute process
-        if ($selectedProcess['firstExecution'] === -1) {
-            $selectedProcess['firstExecution'] = $time;
-        }
-
-        $execTime = min($processQuantum, $selectedProcess['remaining']);
-
-        // Add context switch overhead
-        if ($lastVM !== $selectedVM) {
-            $time += $csOverhead;
-        }
-
-        $time += $cachePenalty;
-
-        $segments[] = [
-            'pid' => $selectedProcess['pid'],
-            'start' => $time,
-            'end' => $time + $execTime,
-            'vm' => $selectedVM
-        ];
-
-        // Update process state
-        foreach ($processes as &$p) {
-            if ($p['pid'] === $selectedProcess['pid']) {
-                $p['remaining'] -= $execTime;
-                $p['contextSwitches']++;
-
-                if ($p['remaining'] <= 0) {
-                    $p['completion'] = $time + $execTime;
-                    $p['state'] = 'completed';
-                    $completed++;
+                $pid = $queue[0];
+                $keyOf = match ($processAlgo) {
+                    'SJF' => fn($q) => $proc[$q]['burst'],
+                    'SRTF' => fn($q) => $tl->rem[$q],
+                    'PRIORITY' => fn($q) => $proc[$q]['priority'],
+                    default => null, // FCFS, RR, MLFQ: queue head
+                };
+                if ($keyOf) {
+                    foreach ($queue as $q) {
+                        if ($keyOf($q) < $keyOf($pid)) {
+                            $pid = $q;
+                        }
+                    }
                 }
-                break;
             }
+            $current[$vm] = $pid;
+            $p = $proc[$pid];
+
+            $extra = 0;
+            if ($features['caching']) {
+                if ($cache->access($pid, $vm)) {
+                    $stats[$vm]['cacheHits']++;
+                } else {
+                    $stats[$vm]['cacheMisses']++;
+                    $extra += CACHE_MISS_PENALTY;
+                }
+            }
+            $demand = array_sum(array_map(fn($q) => $proc[$q]['memReq'], $queue));
+            $stats[$vm]['memoryUsed'] = max($stats[$vm]['memoryUsed'], $demand);
+            if ($features['overcommit'] && $demand > $effectiveMemory[$vm]) {
+                $stats[$vm]['overcommitEvents']++;
+                $extra += PAGING_PENALTY;
+            }
+            $tl->switchTo($pid, $vm, $extra);
+
+            $len = min($tl->rem[$pid], $budget);
+            if ($sliced) {
+                // ponytail: MLFQ inside a VM behaves like RR; per-process levels if it ever matters
+                $len = min($len, $processQuantum);
+            }
+            if ($processAlgo === 'SRTF') {
+                foreach ($processes as $other) {
+                    if ($other['arrival'] > $tl->time && $proc[$other['pid']]['vm'] === $vm) {
+                        $len = min($len, $other['arrival'] - $tl->time);
+                    }
+                }
+            }
+            $cpuBeforeIO = intdiv($p['burst'] + 1, 2); // one I/O burst halfway through the CPU burst
+            $wantsIO = $features['ioScheduling'] && $p['ioTime'] > 0 && empty($ioDone[$pid]);
+            if ($wantsIO) {
+                $len = min($len, $cpuBeforeIO - ($p['burst'] - $tl->rem[$pid]));
+            }
+
+            $tl->run($pid, $len, $vm);
+            $budget -= $len;
+            $stats[$vm]['cpuTime'] += $len;
+            $credits[$vm] -= $len;
+            $ranOn[$vm][$pid] = true;
+
+            if ($tl->rem[$pid] <= 0) {
+                $dequeue($vm, $pid);
+                unset($current[$vm]);
+                $left--;
+            } elseif ($wantsIO && $p['burst'] - $tl->rem[$pid] >= $cpuBeforeIO) {
+                // ponytail: single FCFS I/O device; a priority queue if contention modelling matters
+                $start = max($deviceFree, $tl->time);
+                $deviceFree = $start + $p['ioTime'];
+                $blocked[$pid] = $deviceFree;
+                $ioDone[$pid] = true;
+                $ioSchedule[] = ['pid' => $pid, 'vm' => $vm, 'ioTime' => $p['ioTime'], 'priority' => $p['priority'], 'startTime' => $start];
+                $stats[$vm]['ioOperations']++;
+                $dequeue($vm, $pid);
+                unset($current[$vm]);
+            } elseif ($sliced) {
+                $dequeue($vm, $pid);
+                $queues[$vm][] = $pid;
+            }
+            $admit();
         }
-
-        // Update VM stats
-        $vmStats[$selectedVM]['cpuTime'] += $execTime;
-        $vmStats[$selectedVM]['processCount'] = count($vmProcesses);
-
-        $time += $execTime;
-        $lastVM = $selectedVM;
     }
 
-    // Calculate final metrics
-    $results = [];
-    foreach ($processes as $p) {
-        $results[] = [
-            'pid' => $p['pid'],
-            'vm' => $p['vm'] ?? 'Host',
-            'arrival' => $p['arrival'],
-            'burst' => $p['burst'],
-            'completion' => $p['completion'] ?? $time,
-            'turnaround' => ($p['completion'] ?? $time) - $p['arrival'],
-            'waiting' => (($p['completion'] ?? $time) - $p['arrival']) - $p['burst'],
-            'response' => $p['firstExecution'] >= 0 ? $p['firstExecution'] - $p['arrival'] : 0,
-            'contextSwitches' => $p['contextSwitches'],
-            'affinity' => $p['affinity'] ?? null
-        ];
+    $total = $tl->time;
+    foreach ($stats as $name => &$s) {
+        $s['processCount'] = count($ranOn[$name] ?? []);
+        $s['idleTime'] = $total - $s['cpuTime'];
+        $s['utilization'] = $total > 0 ? $s['cpuTime'] / $total * 100 : 0;
     }
+    unset($s);
 
-    // Finalize VM stats
-    foreach ($vmStats as $vmName => &$stat) {
-        if ($time > 0) {
-            $stat['utilization'] = ($stat['cpuTime'] / $time) * 100;
-            $stat['idleTime'] = $time - $stat['cpuTime'];
-        }
+    $out = $tl->results();
+    foreach ($out['results'] as &$r) {
+        $r['vm'] = $proc[$r['pid']]['vm'];
+        $r['affinity'] = cpu_affinity($proc[$r['pid']], $vms[$r['vm']]);
     }
+    unset($r);
 
-    $cacheStats = $enableCaching ? $cache->getStats() : null;
-
-    return [
-        'results' => $results,
-        'segments' => $segments,
-        'vmStats' => array_values($vmStats),
-        'contextSwitches' => array_sum(array_map(fn($p) => $p['contextSwitches'], $processes)),
+    return $out + [
+        'vmStats' => array_values($stats),
         'totalMigrations' => count($migrations),
         'migrations' => $migrations,
         'ioSchedule' => $ioSchedule,
-        'cacheStats' => $cacheStats,
-        'hypervisorFeatures' => [
-            'migration' => $enableMigration,
-            'overcommit' => $enableOvercommit,
-            'ioScheduling' => $enableIOScheduling,
-            'caching' => $enableCaching
-        ]
+        'cacheStats' => $features['caching'] ? $cache->stats() : null,
+        'hypervisorFeatures' => $features,
     ];
 }
 
-$result = enhanced_hypervisor_schedule(
-    $vms,
-    $processes,
-    $vmScheduler,
-    $vmQuantum,
-    $processAlgo,
-    $processQuantum,
-    $csOverhead,
-    $enableMigration,
-    $enableOvercommit,
-    $enableIOScheduling,
-    $enableCaching,
-    $migrationPenalty
-);
-
-echo json_encode($result, JSON_NUMERIC_CHECK);
+respond(hypervisor_schedule($vms, $processes, $processAlgo, $processQuantum, $vmScheduler, $vmQuantum,
+    $csOverhead, $migrationPenalty, $seed, $features));
