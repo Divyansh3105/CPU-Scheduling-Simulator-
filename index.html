@@ -4,425 +4,334 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CPU Scheduling Simulator with Hypervisor</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
+    <meta name="referrer" content="no-referrer">
+    <meta name="description" content="Compare CPU scheduling algorithms on one workload: FCFS, SJF, SRTF, Priority, Round Robin and MLFQ, with an optional hypervisor layer.">
+    <title>CPU Scheduling Simulator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Semi+Condensed:wght@500;600;700&display=swap">
     <link rel="stylesheet" href="styles.css">
 </head>
 
 <body>
-    <!-- Animated Background -->
-    <div class="animated-bg">
-        <div class="gradient-orb orb-1"></div>
-        <div class="gradient-orb orb-2"></div>
-        <div class="gradient-orb orb-3"></div>
-    </div>
+    <svg width="0" height="0" class="sprite" aria-hidden="true">
+        <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z" fill="currentColor" stroke="none"/></symbol>
+        <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+        <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+        <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.5l9.5 16.5h-19z"/><path d="M12 10v4.5M12 17.5v.5"/></symbol>
+    </svg>
 
-    <div class="container">
-        <!-- Enhanced Header with Animation -->
-        <div class="header-wrapper">
-            <div class="header-icon">⚙️</div>
-            <h1>CPU Scheduling Simulator</h1>
-            <p class="subtitle">with Hypervisor & Multi-Level Queue Management</p>
-        </div>
-
-        <!-- Enhanced Tabs with Icons -->
-        <div class="tabs">
-            <button class="tab active" data-tab="vm">
-                <span class="tab-icon">🖥️</span>
-                <span class="tab-text">Virtual Machines</span>
-            </button>
-            <button class="tab" data-tab="process">
-                <span class="tab-icon">📋</span>
-                <span class="tab-text">Processes</span>
-            </button>
-            <button class="tab" data-tab="simulate">
-                <span class="tab-icon">▶️</span>
-                <span class="tab-text">Simulate</span>
-            </button>
-            <button class="tab" data-tab="monitor">
-                <span class="tab-icon">📊</span>
-                <span class="tab-text">Resource Monitor</span>
-            </button>
-        </div>
-
-        <!-- VM Management Tab -->
-        <div id="vm-tab" class="tab-content active">
-            <div class="section-header">
-                <h3>🖥️ Add Virtual Machine</h3>
-                <div class="section-badge">Configure VM Resources</div>
-            </div>
-
-            <div class="info-box">
-                <div class="info-icon">💡</div>
-                <div class="info-content">
-                    <strong>Virtual Machine Configuration</strong>
-                    <p>Create virtual machines with advanced resource allocation. Each VM can have CPU limits, memory
-                        allocation, and I/O priorities.</p>
-                </div>
-            </div>
-
-            <form id="vmForm">
-                <div class="inputs">
-                    <div class="input-group">
-                        <label>VM Name</label>
-                        <input type="text" id="vmName" placeholder="e.g., VM1" required>
-                    </div>
-                    <div class="input-group">
-                        <label>Priority (1-10)</label>
-                        <input type="number" id="vmPriority" placeholder="5" value="5" min="1" max="10">
-                    </div>
-                    <div class="input-group">
-                        <label>CPU Share %</label>
-                        <input type="number" id="vmCPUShare" placeholder="25" value="25" min="1" max="100">
-                    </div>
-                    <div class="input-group">
-                        <label>Memory (MB)</label>
-                        <input type="number" id="vmMemory" placeholder="512" value="512" min="128" max="8192">
-                    </div>
-                    <div class="input-group">
-                        <label>VM Type</label>
-                        <select id="vmType">
-                            <option value="standard">🔷 Standard VM</option>
-                            <option value="compute">⚡ Compute Optimized</option>
-                            <option value="memory">💾 Memory Optimized</option>
-                            <option value="realtime">⏱️ Real-time VM</option>
-                        </select>
-                    </div>
-                    <button type="submit" id="addVM" class="btn-primary">
-                        <span class="btn-icon">➕</span>
-                        <span>Add VM</span>
-                    </button>
-                </div>
-            </form>
-
-            <div class="section-header">
-                <h3>📊 Virtual Machines List</h3>
-                <div class="vm-count" id="vmCount">0 VMs</div>
-            </div>
-
-            <div class="table-wrapper">
-                <table id="vmTable">
-                    <thead>
-                        <tr>
-                            <th>VM Name</th>
-                            <th>Type</th>
-                            <th>Priority</th>
-                            <th>CPU Share</th>
-                            <th>Memory</th>
-                            <th>Processes</th>
-                            <th>Status</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr class="empty-state">
-                            <td colspan="8">
-                                <div class="empty-content">
-                                    <div class="empty-icon">🖥️</div>
-                                    <p>No virtual machines added yet</p>
-                                    <span>Add your first VM above to get started</span>
-                                </div>
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="btn-group">
-                <button id="loadSampleVMsBtn" class="btn-secondary">
-                    <span class="btn-icon">📦</span>
-                    <span>Load Sample VMs</span>
-                </button>
-                <button id="loadBalancedVMsBtn" class="btn-secondary">
-                    <span class="btn-icon">⚖️</span>
-                    <span>Load Balanced Setup</span>
-                </button>
-                <button id="clearAllVMsBtn" class="btn-danger">
-                    <span class="btn-icon">🗑️</span>
-                    <span>Clear All VMs</span>
-                </button>
+    <header class="masthead">
+        <div class="brand">
+            <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true">
+                <path d="M4 14h32M4 26h32"/>
+                <path d="M9 10v20M17 10v20M25 10v20M33 10v20" class="sleepers"/>
+            </svg>
+            <div>
+                <h1>CPU Scheduling Simulator</h1>
+                <p>One workload, every scheduler, one clock.</p>
             </div>
         </div>
+        <div class="masthead-actions">
+            <label class="switch on-blue">
+                <input type="checkbox" id="hypervisorMode" role="switch">
+                <span class="switch-track" aria-hidden="true"></span>
+                <span>Hypervisor<span class="long"> mode</span></span>
+            </label>
+            <button type="button" class="btn btn-run" id="runBtn">
+                <svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>
+                <span>Run timetable</span>
+            </button>
+        </div>
+    </header>
 
-        <!-- Process Management Tab -->
-        <div id="process-tab" class="tab-content">
-            <div class="section-header">
-                <h3>📋 Add Process</h3>
-                <div class="section-badge">Configure Process Attributes</div>
+    <div class="workspace">
+        <aside class="workload" aria-label="Workload" data-lenis-prevent>
+            <div class="tabs" role="tablist" aria-label="Workload type">
+                <button type="button" role="tab" class="tab" id="tab-processes" aria-selected="true" aria-controls="panel-processes">
+                    Processes <span class="count" id="processCount">0</span>
+                </button>
+                <button type="button" role="tab" class="tab" id="tab-vms" aria-selected="false" aria-controls="panel-vms" tabindex="-1">
+                    Virtual machines <span class="count" id="vmCount">0</span>
+                </button>
             </div>
 
-            <div class="auto-process-control">
-                <label class="toggle-label">
-                    <input type="checkbox" id="autoProcessToggle">
-                    <span class="toggle-slider"></span>
-                    <span class="toggle-text">🤖 Auto-Generate Processes (Every 5 seconds)</span>
-                </label>
-                <div id="autoProcessStatus" class="auto-status" style="display: none;">
-                    ⏱️ Next process in: <span id="countdown">5</span>s
-                </div>
-            </div>
-
-            <div class="info-box">
-                <div class="info-icon">💡</div>
-                <div class="info-content">
-                    <strong>Process Configuration</strong>
-                    <p>Add processes with advanced attributes including I/O bursts, CPU affinity, and memory
-                        requirements.</p>
-                </div>
-            </div>
-
-            <form id="processForm">
-                <div class="inputs">
-                    <div class="input-group">
-                        <label>Process ID</label>
-                        <input type="text" id="pid" placeholder="e.g., P1" required>
+            <section class="panel" id="panel-processes" role="tabpanel" aria-labelledby="tab-processes">
+                <form id="processForm" class="add-form">
+                    <div class="field span-2">
+                        <label for="pid">Process ID</label>
+                        <input type="text" id="pid" placeholder="P5" required pattern="[A-Za-z0-9_.\- ]{1,32}" maxlength="32" title="1-32 letters, digits, spaces, _ . -" autocomplete="off">
                     </div>
-                    <div class="input-group">
-                        <label>Arrival Time</label>
-                        <input type="number" id="arrival" placeholder="0" required min="0">
+                    <div class="field">
+                        <label for="arrival">Arrival</label>
+                        <input type="number" id="arrival" placeholder="0" required min="0" max="10000" inputmode="numeric">
                     </div>
-                    <div class="input-group">
-                        <label>CPU Burst Time</label>
-                        <input type="number" id="burst" placeholder="5" required min="1">
+                    <div class="field">
+                        <label for="burst">Burst</label>
+                        <input type="number" id="burst" placeholder="5" required min="1" max="1000" inputmode="numeric">
                     </div>
-                    <div class="input-group">
-                        <label>Priority (1-10)</label>
-                        <input type="number" id="priority" placeholder="5" min="1" max="10">
+                    <div class="field">
+                        <label for="priority">Priority <span class="hint">1 = high</span></label>
+                        <input type="number" id="priority" placeholder="5" min="1" max="10" inputmode="numeric">
                     </div>
-                    <div class="input-group">
-                        <label>I/O Time</label>
-                        <input type="number" id="ioTime" placeholder="0" min="0" value="0">
+                    <div class="field">
+                        <label for="ioTime">I/O time</label>
+                        <input type="number" id="ioTime" placeholder="0" min="0" max="1000" value="0" inputmode="numeric">
                     </div>
-                    <div class="input-group">
-                        <label>Memory (MB)</label>
-                        <input type="number" id="memReq" placeholder="64" min="1" value="64">
+                    <div class="field">
+                        <label for="memReq">Memory MB</label>
+                        <input type="number" id="memReq" placeholder="64" min="1" max="65536" value="64" inputmode="numeric">
                     </div>
-                    <div class="input-group">
-                        <label>Assigned VM</label>
+                    <div class="field">
+                        <label for="vmAssignment">Runs on</label>
                         <select id="vmAssignment">
-                            <option value="">🏠 Host (No VM)</option>
+                            <option value="">Host</option>
                         </select>
                     </div>
-                    <button type="submit" id="addProcess" class="btn-primary">
-                        <span class="btn-icon">➕</span>
-                        <span>Add Process</span>
+                    <button type="submit" class="btn btn-primary span-2">
+                        <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>
+                        <span>Add process</span>
                     </button>
-                </div>
-            </form>
+                </form>
 
-            <div class="section-header">
-                <h3>📊 Process List</h3>
-                <div class="process-count" id="processCount">0 Processes</div>
-            </div>
-
-            <div class="table-wrapper">
-                <table id="processTable">
-                    <thead>
-                        <tr>
-                            <th>Process</th>
-                            <th>Arrival</th>
-                            <th>CPU Burst</th>
-                            <th>I/O Time</th>
-                            <th>Priority</th>
-                            <th>Memory</th>
-                            <th>Assigned VM</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr class="empty-state">
-                            <td colspan="8">
-                                <div class="empty-content">
-                                    <div class="empty-icon">📋</div>
-                                    <p>No processes added yet</p>
-                                    <span>Add your first process above to get started</span>
-                                </div>
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="btn-group">
-                <button id="loadSampleProcessesBtn" class="btn-secondary">
-                    <span class="btn-icon">📦</span>
-                    <span>Load Sample</span>
-                </button>
-                <button id="loadIOIntensiveBtn" class="btn-secondary">
-                    <span class="btn-icon">💾</span>
-                    <span>I/O Intensive</span>
-                </button>
-                <button id="loadCPUIntensiveBtn" class="btn-secondary">
-                    <span class="btn-icon">⚡</span>
-                    <span>CPU Intensive</span>
-                </button>
-                <button id="clearAllProcessesBtn" class="btn-danger">
-                    <span class="btn-icon">🗑️</span>
-                    <span>Clear All</span>
-                </button>
-            </div>
-        </div>
-
-        <!-- Simulation Tab -->
-        <div id="simulate-tab" class="tab-content">
-            <div class="section-header">
-                <h3>⚙️ Simulation Settings</h3>
-                <div class="section-badge">Configure Scheduler</div>
-            </div>
-
-            <div class="hypervisor-mode">
-                <label class="toggle-label">
-                    <input type="checkbox" id="hypervisorMode">
-                    <span class="toggle-slider"></span>
-                    <span class="toggle-text">Enable Hypervisor Mode (VM-Level Scheduling)</span>
-                </label>
-            </div>
-
-            <div class="settings-grid">
-                <div class="input-group">
-                    <label>Process Scheduling Algorithm</label>
-                    <select id="algorithm" required>
-                        <option value="">Select Algorithm</option>
-                        <option value="FCFS">FCFS (First Come First Serve)</option>
-                        <option value="SJF">SJF (Shortest Job First)</option>
-                        <option value="SRTF">SRTF (Shortest Remaining Time First)</option>
-                        <option value="PRIORITY">Priority Scheduling</option>
-                        <option value="RR">Round Robin</option>
-                        <option value="MLFQ">Multi-Level Feedback Queue</option>
+                <div class="toolbar">
+                    <label class="visually-hidden" for="processPreset">Load a preset workload</label>
+                    <select id="processPreset">
+                        <option value="">Load a preset…</option>
+                        <option value="sample">Textbook sample, 4 processes</option>
+                        <option value="io">I/O-heavy, 4 processes</option>
+                        <option value="cpu">CPU-heavy, 4 processes</option>
                     </select>
+                    <button type="button" class="btn btn-quiet" id="clearProcessesBtn">Clear all</button>
                 </div>
-                <div class="input-group">
-                    <label>Time Quantum (for RR)</label>
-                    <input type="number" id="quantum" placeholder="2" value="2" min="1">
-                </div>
-            </div>
 
-            <div class="settings-grid" id="hypervisorSettings" style="display:none">
-                <div class="input-group">
-                    <label>VM Scheduler</label>
-                    <select id="vmScheduler">
-                        <option value="RR">Round Robin</option>
-                        <option value="PRIORITY">Priority-Based</option>
-                        <option value="PROPORTIONAL">Proportional Share</option>
-                        <option value="CREDIT">Credit-Based</option>
-                        <option value="LOTTERY">Lottery Scheduling</option>
-                    </select>
-                </div>
-                <div class="input-group">
-                    <label>VM Time Slice</label>
-                    <input type="number" id="vmQuantum" placeholder="10" value="10" min="1">
-                </div>
-            </div>
-
-            <div class="advanced-settings">
-                <h4>🔧 Advanced Hypervisor Features</h4>
-                <div class="checkbox-grid">
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="enableMigration">
-                        <span class="checkmark"></span>
-                        <span>Enable VM Migration</span>
+                <div class="auto-row">
+                    <label class="switch">
+                        <input type="checkbox" id="autoProcessToggle" role="switch">
+                        <span class="switch-track" aria-hidden="true"></span>
+                        <span>Add a random process every 5 s</span>
                     </label>
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="enableOvercommit">
-                        <span class="checkmark"></span>
-                        <span>Enable Resource Overcommit</span>
-                    </label>
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="enableIOScheduling">
-                        <span class="checkmark"></span>
-                        <span>Enable I/O Scheduling</span>
-                    </label>
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="enableCaching">
-                        <span class="checkmark"></span>
-                        <span>Enable CPU Caching</span>
-                    </label>
+                    <span class="auto-status" id="autoProcessStatus" hidden>next in <b id="countdown">5</b> s</span>
                 </div>
 
-                <div class="slider-group">
-                    <div class="slider-container">
-                        <label>Context Switch Overhead: <span class="slider-value" id="csOverheadValue">1</span> time
-                            units</label>
-                        <input type="range" id="contextSwitchOverhead" min="0" max="5" value="1" step="0.5">
-                    </div>
-
-                    <div class="slider-container">
-                        <label>Migration Penalty: <span class="slider-value" id="migrationValue">5</span> time
-                            units</label>
-                        <input type="range" id="migrationPenalty" min="0" max="20" value="5" step="1">
-                    </div>
-                </div>
-            </div>
-
-            <button class="btn-simulate" id="runSimulationBtn">
-                <span class="btn-icon">🚀</span>
-                <span>Run Simulation</span>
-                <span class="btn-glow"></span>
-            </button>
-
-            <div class="results" id="results" style="display:none">
-                <div class="section-header">
-                    <h3>📊 Gantt Chart</h3>
-                    <div class="section-badge">Timeline Visualization</div>
-                </div>
-                <div class="chart-wrapper">
-                    <canvas id="ganttChart"></canvas>
-                </div>
-                <div id="legend" class="legend"></div>
-
-                <div class="section-header">
-                    <h3>📋 Scheduling Results</h3>
-                    <div class="section-badge">Process Metrics</div>
-                </div>
-                <div class="table-wrapper">
-                    <table id="resultTable">
+                <div class="table-scroll">
+                    <table class="data" id="processTable">
+                        <caption class="visually-hidden">Processes in the workload</caption>
                         <thead>
                             <tr>
-                                <th>Process</th>
-                                <th>VM</th>
-                                <th>Arrival</th>
-                                <th>Burst</th>
-                                <th>Completion</th>
-                                <th>Turnaround</th>
-                                <th>Waiting</th>
-                                <th>Response</th>
-                                <th>Context Switches</th>
+                                <th scope="col">ID</th>
+                                <th scope="col" class="num">Arr</th>
+                                <th scope="col" class="num">Burst</th>
+                                <th scope="col" class="num">Pri</th>
+                                <th scope="col" class="num">I/O</th>
+                                <th scope="col" class="num">Mem</th>
+                                <th scope="col">On</th>
+                                <th scope="col"><span class="visually-hidden">Remove</span></th>
                             </tr>
                         </thead>
                         <tbody></tbody>
                     </table>
                 </div>
+            </section>
 
-                <div id="averages"></div>
-                <div id="vmStats"></div>
-            </div>
-        </div>
+            <section class="panel" id="panel-vms" role="tabpanel" aria-labelledby="tab-vms" hidden>
+                <form id="vmForm" class="add-form">
+                    <div class="field span-2">
+                        <label for="vmName">VM name</label>
+                        <input type="text" id="vmName" placeholder="VM4" required pattern="[A-Za-z0-9_.\- ]{1,32}" maxlength="32" title="1-32 letters, digits, spaces, _ . -" autocomplete="off">
+                    </div>
+                    <div class="field">
+                        <label for="vmPriority">Priority <span class="hint">1 = high</span></label>
+                        <input type="number" id="vmPriority" value="5" min="1" max="10" inputmode="numeric">
+                    </div>
+                    <div class="field">
+                        <label for="vmCPUShare">CPU share %</label>
+                        <input type="number" id="vmCPUShare" value="25" min="1" max="100" inputmode="numeric">
+                    </div>
+                    <div class="field">
+                        <label for="vmMemory">Memory MB</label>
+                        <input type="number" id="vmMemory" value="512" min="128" max="65536" inputmode="numeric">
+                    </div>
+                    <div class="field">
+                        <label for="vmType">Type</label>
+                        <select id="vmType">
+                            <option value="standard">Standard</option>
+                            <option value="compute">Compute optimised</option>
+                            <option value="memory">Memory optimised</option>
+                            <option value="realtime">Real-time</option>
+                        </select>
+                    </div>
+                    <button type="submit" class="btn btn-primary span-2">
+                        <svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg>
+                        <span>Add VM</span>
+                    </button>
+                </form>
 
-        <!-- Resource Monitor Tab -->
-        <div id="monitor-tab" class="tab-content">
-            <div class="section-header">
-                <h3>📊 Resource Monitor</h3>
-                <div class="section-badge">Real-time Metrics</div>
-            </div>
-
-            <div class="info-box">
-                <div class="info-icon">💡</div>
-                <div class="info-content">
-                    <strong>Resource Visualization</strong>
-                    <p>Real-time visualization of CPU, memory, and I/O utilization across VMs</p>
+                <div class="toolbar">
+                    <label class="visually-hidden" for="vmPreset">Load a preset set of VMs</label>
+                    <select id="vmPreset">
+                        <option value="">Load a preset…</option>
+                        <option value="sample">Sample, 3 VMs</option>
+                        <option value="balanced">Balanced web stack, 4 VMs</option>
+                    </select>
+                    <button type="button" class="btn btn-quiet" id="clearVMsBtn">Clear all</button>
                 </div>
-            </div>
 
-            <div id="resourceMonitor" class="resource-monitor">
-                <div class="monitor-placeholder">
-                    <div class="placeholder-icon">📊</div>
-                    <p>Run a simulation to see resource utilization</p>
-                    <span>Switch to the Simulate tab and run a simulation</span>
+                <p class="note">VMs only take effect in hypervisor mode. Removing a VM moves its processes to the host.</p>
+
+                <div class="table-scroll">
+                    <table class="data" id="vmTable">
+                        <caption class="visually-hidden">Virtual machines</caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">Name</th>
+                                <th scope="col">Type</th>
+                                <th scope="col" class="num">Pri</th>
+                                <th scope="col" class="num">Share</th>
+                                <th scope="col" class="num">Mem</th>
+                                <th scope="col" class="num">Procs</th>
+                                <th scope="col"><span class="visually-hidden">Remove</span></th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
                 </div>
-            </div>
-        </div>
+            </section>
+        </aside>
+
+        <main class="board">
+            <section class="controls" aria-label="Schedule settings">
+                <fieldset class="algos">
+                    <legend>Compare</legend>
+                    <div class="chips" id="algoChips">
+                        <label class="chip"><input type="checkbox" value="FCFS" checked><span>FCFS</span></label>
+                        <label class="chip"><input type="checkbox" value="SJF" checked><span>SJF</span></label>
+                        <label class="chip"><input type="checkbox" value="SRTF"><span>SRTF</span></label>
+                        <label class="chip"><input type="checkbox" value="PRIORITY"><span>Priority</span></label>
+                        <label class="chip"><input type="checkbox" value="RR" checked><span>Round Robin</span></label>
+                        <label class="chip"><input type="checkbox" value="MLFQ"><span>MLFQ</span></label>
+                    </div>
+                </fieldset>
+
+                <div class="settings">
+                    <div class="field inline">
+                        <label for="quantum">Quantum</label>
+                        <input type="number" id="quantum" value="2" min="1" max="1000" inputmode="numeric">
+                    </div>
+                    <div class="field slider">
+                        <label for="contextSwitchOverhead">Context switch <output id="csOverheadValue" for="contextSwitchOverhead">1</output></label>
+                        <input type="range" id="contextSwitchOverhead" min="0" max="5" value="1" step="0.5">
+                    </div>
+                </div>
+
+                <div class="hv-settings" id="hypervisorSettings" hidden>
+                    <div class="field inline">
+                        <label for="vmScheduler">VM scheduler</label>
+                        <select id="vmScheduler">
+                            <option value="RR">Round robin</option>
+                            <option value="PRIORITY">Priority</option>
+                            <option value="PROPORTIONAL">Proportional share</option>
+                            <option value="CREDIT">Credit</option>
+                            <option value="LOTTERY">Lottery</option>
+                        </select>
+                    </div>
+                    <div class="field inline">
+                        <label for="vmQuantum">VM slice</label>
+                        <input type="number" id="vmQuantum" value="10" min="1" max="1000" inputmode="numeric">
+                    </div>
+                    <div class="field slider">
+                        <label for="migrationPenalty">Migration penalty <output id="migrationValue" for="migrationPenalty">5</output></label>
+                        <input type="range" id="migrationPenalty" min="0" max="20" value="5" step="1">
+                    </div>
+                    <div class="features">
+                        <label class="check"><input type="checkbox" id="enableMigration"><span>Live migration</span></label>
+                        <label class="check"><input type="checkbox" id="enableOvercommit"><span>Memory overcommit</span></label>
+                        <label class="check"><input type="checkbox" id="enableIOScheduling"><span>I/O blocking</span></label>
+                        <label class="check"><input type="checkbox" id="enableCaching"><span>CPU cache</span></label>
+                    </div>
+                </div>
+            </section>
+
+            <section class="timetable" aria-labelledby="tt-title">
+                <div class="section-head">
+                    <h2 id="tt-title">Timetable</h2>
+                    <p class="readout" id="clockReadout" aria-live="polite">Add processes, pick algorithms, then run.</p>
+                </div>
+                <div class="chart-wrap" id="chartWrap">
+                    <canvas id="timetable" tabindex="0" role="img" aria-label="Timetable chart. Run a schedule to draw it."></canvas>
+                    <div class="chart-empty" id="chartEmpty">
+                        <p>No timetable yet</p>
+                        <span>Load a preset workload on the left and press <b>Run timetable</b>. Each algorithm gets its own track on one shared clock.</span>
+                    </div>
+                    <div class="stale-banner" id="staleBanner" hidden>
+                        <svg class="icon" aria-hidden="true"><use href="#i-alert"/></svg>
+                        Workload changed. Run again to update the timetable.
+                    </div>
+                </div>
+                <div class="chart-foot">
+                    <div class="legend" id="legend"></div>
+                    <p class="chart-help">Drag or use arrow keys on the chart to move the clock. Hover a train to follow it across tracks.</p>
+                </div>
+            </section>
+
+            <section class="league" aria-labelledby="league-title" id="leagueSection" hidden>
+                <div class="section-head">
+                    <h2 id="league-title">Comparison</h2>
+                    <p class="readout">Averages per algorithm. Best in each column is marked. Select a row for its details.</p>
+                </div>
+                <div class="table-scroll">
+                    <table class="data league-table" id="leagueTable">
+                        <thead>
+                            <tr>
+                                <th scope="col">Algorithm</th>
+                                <th scope="col" class="num">Avg turnaround</th>
+                                <th scope="col" class="num">Avg waiting</th>
+                                <th scope="col" class="num">Avg response</th>
+                                <th scope="col" class="num">Throughput</th>
+                                <th scope="col" class="num">CPU busy</th>
+                                <th scope="col" class="num">Switches</th>
+                                <th scope="col" class="num hv-only">Migrations</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="detail" aria-labelledby="detail-title" id="detailSection" hidden>
+                <div class="section-head">
+                    <h2 id="detail-title">Per-process results</h2>
+                    <div class="segmented" role="tablist" aria-label="Algorithm" id="detailTabs"></div>
+                </div>
+                <div class="table-scroll">
+                    <table class="data" id="resultTable">
+                        <thead>
+                            <tr>
+                                <th scope="col">Process</th>
+                                <th scope="col">On</th>
+                                <th scope="col" class="num">Arrival</th>
+                                <th scope="col" class="num">Burst</th>
+                                <th scope="col" class="num">Completion</th>
+                                <th scope="col" class="num">Turnaround</th>
+                                <th scope="col" class="num">Waiting</th>
+                                <th scope="col" class="num">Response</th>
+                                <th scope="col" class="num">Switches</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+                <div id="hvDetail"></div>
+            </section>
+        </main>
     </div>
 
-    <script type="text/javascript" charset="utf-8" src="script.js"></script>
+    <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lenis@1.1.13/dist/lenis.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="script.js"></script>
 </body>
 
 </html>

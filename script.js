@@ -1,1594 +1,1111 @@
-let processes = [];
-let virtualMachines = [];
-let simulationResults = null;
+"use strict";
 
-// Auto-process generation
-let autoProcessInterval = null;
-let autoProcessCountdown = null;
-let processCounter = 1;
+// Must match NAME_PATTERN / MAX_PROCESSES in common.php
+const NAME_RE = /^[A-Za-z0-9_.\- ]{1,32}$/;
+const MAX_PROCESSES = 100;
 
-// Configuration - Update these paths to match your server
 const PHP_BACKEND = {
   simulate: "simulate.php",
   hypervisor: "simulate_hypervisor.php",
 };
 
-// Tab switching
-document.querySelectorAll(".tab").forEach((tab) => {
-  tab.addEventListener("click", function () {
-    const tabName = this.getAttribute("data-tab");
-    document
-      .querySelectorAll(".tab")
-      .forEach((t) => t.classList.remove("active"));
-    document
-      .querySelectorAll(".tab-content")
-      .forEach((c) => c.classList.remove("active"));
-    this.classList.add("active");
-    document.getElementById(`${tabName}-tab`).classList.add("active");
+const ALGO_LABELS = {
+  FCFS: "FCFS",
+  SJF: "SJF",
+  SRTF: "SRTF",
+  PRIORITY: "Priority",
+  RR: "Round Robin",
+  MLFQ: "MLFQ",
+};
+
+// Flat route colours, assigned by workload order so a process keeps its colour on every track.
+const ROUTE_COLORS = [
+  "#0055a4", "#d06f00", "#1b8a4b", "#7a3e9d", "#00838f", "#b5179e",
+  "#5f7d00", "#3a5dae", "#a15c2f", "#b38600", "#4b6b88", "#c2185b",
+];
+
+// Non-process segments returned by the backend.
+const SPECIAL = { IDLE: true, CS: true, MIGRATION: true };
+
+const state = {
+  processes: [],
+  vms: [],
+  runs: [], // [{ algo, data, metrics }]
+  hv: false,
+  selected: null,
+  clock: null,
+  hoverPid: null,
+  stale: false,
+  hasRun: false,
+  progress: 1,
+  geom: null,
+};
+
+let processCounter = 1;
+let autoProcessInterval = null;
+let autoProcessCountdown = null;
+let runSeq = 0;
+
+const $ = (id) => document.getElementById(id);
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+// Escape anything interpolated into innerHTML (user input and server echoes of it).
+function esc(value) {
+  return String(value ?? "").replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]
+  );
+}
+
+const fmt = (n, d = 2) => (Number.isFinite(n) ? n.toFixed(d) : "–");
+const fmtTime = (n) => (Number.isInteger(n) ? String(n) : Number(n).toFixed(1));
+const icon = (id) => `<svg class="icon" aria-hidden="true"><use href="#${id}"/></svg>`;
+
+function colorFor(pid) {
+  const idx = state.processes.findIndex((p) => p.pid === pid);
+  return ROUTE_COLORS[(idx === -1 ? hashIndex(pid) : idx) % ROUTE_COLORS.length];
+}
+
+function hashIndex(str) {
+  let h = 0;
+  for (const ch of String(str)) h = (h * 31 + ch.charCodeAt(0)) | 0;
+  return Math.abs(h);
+}
+
+/* ---------------- Toasts ---------------- */
+
+function showNotification(message, type = "info") {
+  const region = $("toasts");
+  const toast = document.createElement("div");
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  region.appendChild(toast);
+  while (region.children.length > 3) region.firstElementChild.remove();
+  setTimeout(() => {
+    toast.classList.add("leaving");
+    setTimeout(() => toast.remove(), 220);
+  }, type === "error" ? 5000 : 2800);
+}
+
+/* ---------------- Workload tabs ---------------- */
+
+const tabs = [$("tab-processes"), $("tab-vms")];
+tabs.forEach((tab) => {
+  tab.addEventListener("click", () => selectTab(tab));
+  tab.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    const next = tabs[(tabs.indexOf(tab) + 1) % tabs.length];
+    selectTab(next);
+    next.focus();
   });
 });
 
-// Hypervisor mode toggle
-document.getElementById("hypervisorMode").addEventListener("change", (e) => {
-  document.getElementById("hypervisorSettings").style.display = e.target.checked
-    ? "grid"
-    : "none";
-});
-
-// Slider updates
-document
-  .getElementById("contextSwitchOverhead")
-  .addEventListener("input", (e) => {
-    document.getElementById("csOverheadValue").textContent = e.target.value;
+function selectTab(active) {
+  tabs.forEach((tab) => {
+    const on = tab === active;
+    tab.setAttribute("aria-selected", on);
+    tab.tabIndex = on ? 0 : -1;
+    $(tab.getAttribute("aria-controls")).hidden = !on;
   });
+}
 
-document.getElementById("migrationPenalty").addEventListener("input", (e) => {
-  document.getElementById("migrationValue").textContent = e.target.value;
-});
+/* ---------------- Workload: processes ---------------- */
 
-// Add VM
-document.getElementById("vmForm").addEventListener("submit", (e) => {
+$("processForm").addEventListener("submit", (e) => {
   e.preventDefault();
-  const vmName = document.getElementById("vmName").value.trim();
-  const vmPriority = parseInt(document.getElementById("vmPriority").value) || 5;
-  const vmCPUShare =
-    parseInt(document.getElementById("vmCPUShare").value) || 25;
-  const vmMemory = parseInt(document.getElementById("vmMemory").value) || 512;
-  const vmType = document.getElementById("vmType").value;
+  const pid = $("pid").value.trim();
+  const arrival = parseInt($("arrival").value, 10);
+  const burst = parseInt($("burst").value, 10);
+  const priority = parseInt($("priority").value, 10) || 5;
+  const ioTime = parseInt($("ioTime").value, 10) || 0;
+  const memReq = parseInt($("memReq").value, 10) || 64;
+  const vm = $("vmAssignment").value || "Host";
 
-  if (!vmName) {
-    showNotification("Please enter VM name!", "error");
+  if (!NAME_RE.test(pid)) {
+    showNotification("Process ID must be 1-32 letters, digits, spaces, _ . -", "error");
+    return;
+  }
+  if (isNaN(arrival) || isNaN(burst)) {
+    showNotification("Enter an arrival time and a burst time.", "error");
+    return;
+  }
+  if (state.processes.some((p) => p.pid === pid)) {
+    showNotification(`Process ${pid} already exists.`, "error");
+    return;
+  }
+  if (state.processes.length >= MAX_PROCESSES) {
+    showNotification(`At most ${MAX_PROCESSES} processes are allowed.`, "error");
     return;
   }
 
-  if (virtualMachines.some((v) => v.name === vmName)) {
-    showNotification("VM name already exists!", "error");
-    return;
-  }
-
-  virtualMachines.push({
-    name: vmName,
-    priority: vmPriority,
-    cpuShare: vmCPUShare,
-    memory: vmMemory,
-    type: vmType,
-    status: "active",
-  });
-
-  updateVMTable();
-  updateVMDropdown();
-  updateVMCount();
-  document.getElementById("vmForm").reset();
-  showNotification(`VM "${vmName}" added successfully!`, "success");
+  state.processes.push({ pid, arrival, burst, priority, ioTime, memReq, vm });
+  workloadChanged();
+  e.target.reset();
+  $("pid").focus();
 });
 
-// Add Process
-document.getElementById("processForm").addEventListener("submit", (e) => {
+$("processPreset").addEventListener("change", (e) => {
+  const preset = PROCESS_PRESETS[e.target.value];
+  e.target.value = "";
+  if (!preset) return;
+  state.processes = preset.map((p) => ({ ...p, vm: "Host" }));
+  workloadChanged();
+  showNotification("Preset workload loaded.", "success");
+});
+
+$("clearProcessesBtn").addEventListener("click", () => {
+  if (!state.processes.length || !confirm("Remove every process from the workload?")) return;
+  state.processes = [];
+  processCounter = 1;
+  workloadChanged();
+});
+
+function removeProcess(pid) {
+  state.processes = state.processes.filter((p) => p.pid !== pid);
+  workloadChanged();
+}
+
+function renderProcessTable() {
+  const tbody = document.querySelector("#processTable tbody");
+  $("processCount").textContent = state.processes.length;
+  if (!state.processes.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">No processes yet. Add one above or load a preset.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = state.processes
+    .map(
+      (p) => `<tr>
+        <td><span class="pid"><i class="swatch" style="background:${colorFor(p.pid)}"></i>${esc(p.pid)}</span></td>
+        <td class="num">${esc(p.arrival)}</td>
+        <td class="num">${esc(p.burst)}</td>
+        <td class="num">${esc(p.priority)}</td>
+        <td class="num">${esc(p.ioTime)}</td>
+        <td class="num">${esc(p.memReq)}</td>
+        <td>${p.vm === "Host" ? "Host" : `<span class="tag">${esc(p.vm)}</span>`}</td>
+        <td><button type="button" class="icon-btn" data-pid="${esc(p.pid)}" aria-label="Remove ${esc(p.pid)}">${icon("i-x")}</button></td>
+      </tr>`
+    )
+    .join("");
+  tbody.querySelectorAll(".icon-btn").forEach((btn) =>
+    btn.addEventListener("click", () => removeProcess(btn.dataset.pid))
+  );
+}
+
+/* ---------------- Workload: VMs ---------------- */
+
+$("vmForm").addEventListener("submit", (e) => {
   e.preventDefault();
-  const pid = document.getElementById("pid").value.trim();
-  const arrival = parseInt(document.getElementById("arrival").value);
-  const burst = parseInt(document.getElementById("burst").value);
-  const priority = document.getElementById("priority").value
-    ? parseInt(document.getElementById("priority").value)
-    : 5;
-  const ioTime = parseInt(document.getElementById("ioTime").value) || 0;
-  const memReq = parseInt(document.getElementById("memReq").value) || 64;
-  const vmAssignment = document.getElementById("vmAssignment").value;
-
-  if (!pid || isNaN(arrival) || isNaN(burst)) {
-    showNotification(
-      "Please fill Process ID, Arrival Time and Burst Time!",
-      "error"
-    );
+  const name = $("vmName").value.trim();
+  if (!NAME_RE.test(name) || name === "Host") {
+    showNotification('VM name must be 1-32 letters, digits, spaces, _ . - and not "Host".', "error");
     return;
   }
-
-  if (processes.some((p) => p.pid === pid)) {
-    showNotification("Process ID already exists!", "error");
+  if (state.vms.some((v) => v.name === name)) {
+    showNotification(`VM ${name} already exists.`, "error");
     return;
   }
-
-  processes.push({
-    pid,
-    arrival,
-    burst,
-    priority,
-    ioTime,
-    memReq,
-    vm: vmAssignment || "Host",
-    originalBurst: burst,
+  state.vms.push({
+    name,
+    priority: parseInt($("vmPriority").value, 10) || 5,
+    cpuShare: parseInt($("vmCPUShare").value, 10) || 25,
+    memory: parseInt($("vmMemory").value, 10) || 512,
+    type: $("vmType").value,
   });
-
-  updateProcessTable();
-  updateProcessCount();
-  document.getElementById("processForm").reset();
-  showNotification(`Process "${pid}" added successfully!`, "success");
+  vmsChanged();
+  e.target.reset();
+  $("vmName").focus();
 });
 
-// Button handlers
-document
-  .getElementById("loadSampleVMsBtn")
-  .addEventListener("click", loadSampleVMs);
-document
-  .getElementById("loadBalancedVMsBtn")
-  .addEventListener("click", loadBalancedVMs);
-document
-  .getElementById("clearAllVMsBtn")
-  .addEventListener("click", clearAllVMs);
-document
-  .getElementById("loadSampleProcessesBtn")
-  .addEventListener("click", loadSampleProcesses);
-document
-  .getElementById("loadIOIntensiveBtn")
-  .addEventListener("click", loadIOIntensiveProcesses);
-document
-  .getElementById("loadCPUIntensiveBtn")
-  .addEventListener("click", loadCPUIntensiveProcesses);
-document
-  .getElementById("clearAllProcessesBtn")
-  .addEventListener("click", clearAllProcesses);
-document
-  .getElementById("runSimulationBtn")
-  .addEventListener("click", runSimulation);
+$("vmPreset").addEventListener("change", (e) => {
+  const preset = VM_PRESETS[e.target.value];
+  e.target.value = "";
+  if (!preset) return;
+  state.vms = preset.map((v) => ({ ...v }));
+  // Spread processes across the new VMs so hypervisor mode has something to schedule.
+  state.processes.forEach((p, i) => (p.vm = state.vms[i % state.vms.length].name));
+  vmsChanged();
+  showNotification("Preset VMs loaded and processes spread across them.", "success");
+});
 
-// Auto-process generation
-document.getElementById("autoProcessToggle").addEventListener("change", (e) => {
-  if (e.target.checked) {
-    if (virtualMachines.length === 0) {
-      showNotification("Please add at least one VM first!", "error");
-      e.target.checked = false;
-      return;
-    }
-    startAutoProcessGeneration();
-  } else {
-    stopAutoProcessGeneration();
+$("clearVMsBtn").addEventListener("click", () => {
+  if (!state.vms.length || !confirm("Remove every VM? Their processes move to the host.")) return;
+  state.vms = [];
+  state.processes.forEach((p) => (p.vm = "Host"));
+  vmsChanged();
+});
+
+function removeVM(name) {
+  state.vms = state.vms.filter((v) => v.name !== name);
+  state.processes.forEach((p) => {
+    if (p.vm === name) p.vm = "Host";
+  });
+  vmsChanged();
+}
+
+function vmsChanged() {
+  renderVMOptions();
+  workloadChanged();
+}
+
+function renderVMTable() {
+  const tbody = document.querySelector("#vmTable tbody");
+  $("vmCount").textContent = state.vms.length;
+  if (!state.vms.length) {
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="7">No VMs yet. Add one above or load a preset.</td></tr>`;
+    return;
   }
+  tbody.innerHTML = state.vms
+    .map((vm) => {
+      const count = state.processes.filter((p) => p.vm === vm.name).length;
+      return `<tr>
+        <td><span class="tag">${esc(vm.name)}</span></td>
+        <td>${esc(vm.type)}</td>
+        <td class="num">${esc(vm.priority)}</td>
+        <td class="num">${esc(vm.cpuShare)}%</td>
+        <td class="num">${esc(vm.memory)}</td>
+        <td class="num">${count}</td>
+        <td><button type="button" class="icon-btn" data-vm="${esc(vm.name)}" aria-label="Remove ${esc(vm.name)}">${icon("i-x")}</button></td>
+      </tr>`;
+    })
+    .join("");
+  tbody.querySelectorAll(".icon-btn").forEach((btn) =>
+    btn.addEventListener("click", () => removeVM(btn.dataset.vm))
+  );
+}
+
+function renderVMOptions() {
+  const select = $("vmAssignment");
+  const current = select.value;
+  select.replaceChildren(new Option("Host", ""));
+  state.vms.forEach((vm) => select.add(new Option(`${vm.name} (${vm.type})`, vm.name)));
+  select.value = state.vms.some((v) => v.name === current) ? current : "";
+}
+
+/* ---------------- Auto-generation ---------------- */
+
+$("autoProcessToggle").addEventListener("change", (e) => {
+  e.target.checked ? startAutoProcessGeneration() : stopAutoProcessGeneration();
 });
 
 function startAutoProcessGeneration() {
-  document.getElementById("autoProcessStatus").style.display = "block";
-  showNotification("Auto-process generation started!", "success");
-
+  $("autoProcessStatus").hidden = false;
   let countdown = 5;
-  document.getElementById("countdown").textContent = countdown;
-
+  $("countdown").textContent = countdown;
   autoProcessCountdown = setInterval(() => {
-    countdown--;
-    document.getElementById("countdown").textContent = countdown;
-    if (countdown <= 0) countdown = 5;
+    countdown = countdown <= 1 ? 5 : countdown - 1;
+    $("countdown").textContent = countdown;
   }, 1000);
-
-  autoProcessInterval = setInterval(() => {
-    generateRandomProcess();
-  }, 5000);
+  autoProcessInterval = setInterval(generateRandomProcess, 5000);
 }
 
 function stopAutoProcessGeneration() {
-  if (autoProcessInterval) {
-    clearInterval(autoProcessInterval);
-    autoProcessInterval = null;
-  }
-  if (autoProcessCountdown) {
-    clearInterval(autoProcessCountdown);
-    autoProcessCountdown = null;
-  }
-  document.getElementById("autoProcessStatus").style.display = "none";
-  showNotification("Auto-process generation stopped!", "info");
+  clearInterval(autoProcessInterval);
+  clearInterval(autoProcessCountdown);
+  autoProcessInterval = autoProcessCountdown = null;
+  $("autoProcessStatus").hidden = true;
+  $("autoProcessToggle").checked = false;
 }
 
 function generateRandomProcess() {
-  if (virtualMachines.length === 0) {
+  if (state.processes.length >= MAX_PROCESSES) {
     stopAutoProcessGeneration();
-    document.getElementById("autoProcessToggle").checked = false;
-    showNotification("No VMs available. Auto-generation stopped.", "error");
+    showNotification(`Process limit (${MAX_PROCESSES}) reached; auto-add stopped.`, "error");
     return;
   }
+  let pid;
+  do {
+    pid = `AUTO_P${processCounter++}`;
+  } while (state.processes.some((p) => p.pid === pid));
 
-  const pid = `AUTO_P${processCounter++}`;
-  const arrival =
-    processes.length > 0
-      ? Math.max(...processes.map((p) => p.arrival)) +
-        Math.floor(Math.random() * 3) +
-        1
-      : 0;
-  const burst = Math.floor(Math.random() * 10) + 3;
-  const priority = Math.floor(Math.random() * 10) + 1;
-  const ioTime = Math.random() > 0.5 ? Math.floor(Math.random() * 4) : 0;
-  const memReq = [64, 128, 256, 512][Math.floor(Math.random() * 4)];
-  const randomVM =
-    virtualMachines[Math.floor(Math.random() * virtualMachines.length)];
-
-  processes.push({
+  const lastArrival = state.processes.reduce((m, p) => Math.max(m, p.arrival), -1);
+  const vm = state.vms.length ? state.vms[Math.floor(Math.random() * state.vms.length)].name : "Host";
+  state.processes.push({
     pid,
-    arrival,
-    burst,
-    priority,
-    ioTime,
-    memReq,
-    vm: randomVM.name,
-    originalBurst: burst,
+    arrival: lastArrival < 0 ? 0 : lastArrival + 1 + Math.floor(Math.random() * 3),
+    burst: 3 + Math.floor(Math.random() * 10),
+    priority: 1 + Math.floor(Math.random() * 10),
+    ioTime: Math.random() > 0.5 ? Math.floor(Math.random() * 4) : 0,
+    memReq: [64, 128, 256, 512][Math.floor(Math.random() * 4)],
+    vm,
   });
-
-  updateProcessTable();
-  updateProcessCount();
-  showNotification(`🤖 Auto-generated: ${pid} → ${randomVM.name}`, "success");
+  workloadChanged();
+  showNotification(`Added ${pid} on ${vm}.`, "info");
 }
 
-function updateVMCount() {
-  const countElement = document.getElementById("vmCount");
-  if (countElement) {
-    countElement.textContent = `${virtualMachines.length} VM${
-      virtualMachines.length !== 1 ? "s" : ""
-    }`;
+/* ---------------- Settings ---------------- */
+
+$("hypervisorMode").addEventListener("change", (e) => {
+  $("hypervisorSettings").hidden = !e.target.checked;
+  settingsChanged();
+});
+
+$("contextSwitchOverhead").addEventListener("input", (e) => {
+  $("csOverheadValue").textContent = e.target.value;
+});
+$("migrationPenalty").addEventListener("input", (e) => {
+  $("migrationValue").textContent = e.target.value;
+});
+
+document
+  .querySelectorAll(
+    "#algoChips input, #quantum, #contextSwitchOverhead, #vmScheduler, #vmQuantum, #migrationPenalty, .features input"
+  )
+  .forEach((el) => el.addEventListener("change", settingsChanged));
+
+// Once a timetable exists, every setting change re-runs all selected algorithms.
+let settingsTimer = null;
+function settingsChanged() {
+  if (!state.hasRun || state.stale) return;
+  clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(runSimulation, 250);
+}
+
+function workloadChanged() {
+  renderProcessTable();
+  renderVMTable();
+  if (state.hasRun && !state.stale) {
+    state.stale = true;
+    $("chartWrap").classList.add("is-stale");
+    $("staleBanner").hidden = false;
   }
 }
 
-function updateProcessCount() {
-  const countElement = document.getElementById("processCount");
-  if (countElement) {
-    countElement.textContent = `${processes.length} Process${
-      processes.length !== 1 ? "es" : ""
-    }`;
-  }
+/* ---------------- Running ---------------- */
+
+$("runBtn").addEventListener("click", runSimulation);
+
+function selectedAlgorithms() {
+  return [...document.querySelectorAll("#algoChips input:checked")].map((i) => i.value);
 }
 
-function showNotification(message, type = "info") {
-  const existingNotifications = document.querySelectorAll(".notification");
-  existingNotifications.forEach((n) => n.remove());
-
-  const notification = document.createElement("div");
-  notification.className = `notification notification-${type}`;
-  notification.textContent = message;
-
-  const styles = {
-    position: "fixed",
-    top: "20px",
-    right: "20px",
-    padding: "16px 24px",
-    borderRadius: "12px",
-    fontWeight: "600",
-    fontSize: "15px",
-    zIndex: "10000",
-    animation: "slideIn 0.3s ease-out",
-    boxShadow: "0 8px 32px rgba(0, 0, 0, 0.4)",
-    minWidth: "300px",
-    maxWidth: "500px",
+function buildPayload(algo, hv) {
+  const processes = state.processes.map(({ pid, arrival, burst, priority, ioTime, memReq, vm }) => ({
+    pid, arrival, burst, priority, ioTime, memReq, vm,
+  }));
+  const quantum = parseInt($("quantum").value, 10) || 2;
+  const csOverhead = parseFloat($("contextSwitchOverhead").value) || 0;
+  if (!hv) return { algorithm: algo, quantum, processes, csOverhead };
+  return {
+    processAlgo: algo,
+    processQuantum: quantum,
+    processes,
+    vms: state.vms,
+    vmScheduler: $("vmScheduler").value,
+    vmQuantum: parseInt($("vmQuantum").value, 10) || 10,
+    enableMigration: $("enableMigration").checked,
+    enableOvercommit: $("enableOvercommit").checked,
+    enableIOScheduling: $("enableIOScheduling").checked,
+    enableCaching: $("enableCaching").checked,
+    csOverhead,
+    migrationPenalty: parseInt($("migrationPenalty").value, 10) || 0,
   };
-
-  Object.assign(notification.style, styles);
-
-  if (type === "success") {
-    notification.style.background =
-      "linear-gradient(135deg, #4caf50 0%, #66bb6a 100%)";
-    notification.style.color = "#fff";
-  } else if (type === "error") {
-    notification.style.background =
-      "linear-gradient(135deg, #ff4444 0%, #ff6666 100%)";
-    notification.style.color = "#fff";
-  } else {
-    notification.style.background =
-      "linear-gradient(135deg, #00ffcc 0%, #00d9b3 100%)";
-    notification.style.color = "#000";
-  }
-
-  document.body.appendChild(notification);
-  setTimeout(() => {
-    notification.style.animation = "slideOut 0.3s ease-in";
-    setTimeout(() => notification.remove(), 300);
-  }, 3000);
 }
 
-if (!document.getElementById("notification-styles")) {
-  const style = document.createElement("style");
-  style.id = "notification-styles";
-  style.textContent = `
-    @keyframes slideIn {
-      from { transform: translateX(400px); opacity: 0; }
-      to { transform: translateX(0); opacity: 1; }
-    }
-    @keyframes slideOut {
-      from { transform: translateX(0); opacity: 1; }
-      to { transform: translateX(400px); opacity: 0; }
-    }
-  `;
-  document.head.appendChild(style);
-}
-
-function updateVMTable() {
-  const tbody = document.querySelector("#vmTable tbody");
-  if (virtualMachines.length === 0) {
-    tbody.innerHTML = `<tr class="empty-state"><td colspan="8"><div class="empty-content"><div class="empty-icon">🖥️</div><p>No virtual machines added yet</p><span>Add your first VM above to get started</span></div></td></tr>`;
-    return;
-  }
-
-  tbody.innerHTML = "";
-  virtualMachines.forEach((vm, idx) => {
-    const vmProcessCount = processes.filter((p) => p.vm === vm.name).length;
-    const statusClass =
-      vm.status === "active" ? "status-active" : "status-idle";
-    const row = document.createElement("tr");
-    row.innerHTML = `
-      <td><strong>${vm.name}</strong></td>
-      <td><span class="vm-badge">${vm.type}</span></td>
-      <td>${vm.priority}</td>
-      <td>${vm.cpuShare}%</td>
-      <td>${vm.memory} MB</td>
-      <td><span class="process-badge">${vmProcessCount} processes</span></td>
-      <td><span class="status-badge ${statusClass}">${vm.status}</span></td>
-      <td><button class="remove-btn" data-idx="${idx}">✕ Remove</button></td>
-    `;
-    row.querySelector(".remove-btn").addEventListener("click", function () {
-      removeVM(this.getAttribute("data-idx"));
+async function post(url, payload) {
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     });
-    tbody.appendChild(row);
-  });
-}
-
-function updateVMDropdown() {
-  const select = document.getElementById("vmAssignment");
-  select.innerHTML = '<option value="">🏠 Host (No VM)</option>';
-  virtualMachines.forEach((vm) => {
-    const icon =
-      vm.type === "compute"
-        ? "⚡"
-        : vm.type === "memory"
-        ? "💾"
-        : vm.type === "realtime"
-        ? "⏱️"
-        : "🔷";
-    select.innerHTML += `<option value="${vm.name}">${icon} ${vm.name} (${vm.type})</option>`;
-  });
-}
-
-function updateProcessTable() {
-  const tbody = document.querySelector("#processTable tbody");
-  if (processes.length === 0) {
-    tbody.innerHTML = `<tr class="empty-state"><td colspan="8"><div class="empty-content"><div class="empty-icon">📋</div><p>No processes added yet</p><span>Add your first process above to get started</span></div></td></tr>`;
-    return;
+  } catch {
+    throw new Error(`Can't reach ${url}. Serve this folder with PHP (php -S localhost:8000).`);
   }
-
-  tbody.innerHTML = "";
-  processes.forEach((p, idx) => {
-    const row = document.createElement("tr");
-    row.innerHTML = `
-      <td><strong>${p.pid}</strong></td>
-      <td>${p.arrival}</td>
-      <td>${p.burst}</td>
-      <td>${p.ioTime || 0}</td>
-      <td>${
-        p.priority !== null && p.priority !== undefined ? p.priority : "-"
-      }</td>
-      <td>${p.memReq || 64} MB</td>
-      <td><span class="process-badge">${p.vm}</span></td>
-      <td><button class="remove-btn" data-idx="${idx}">✕</button></td>
-    `;
-    row.querySelector(".remove-btn").addEventListener("click", function () {
-      removeProcess(this.getAttribute("data-idx"));
-    });
-    tbody.appendChild(row);
-  });
-}
-
-function removeVM(idx) {
-  const vm = virtualMachines[idx];
-  if (
-    confirm(
-      `Remove ${vm.name}? All processes assigned to this VM will be moved to Host.`
-    )
-  ) {
-    processes.forEach((p) => {
-      if (p.vm === vm.name) p.vm = "Host";
-    });
-    virtualMachines.splice(idx, 1);
-    updateVMTable();
-    updateVMDropdown();
-    updateProcessTable();
-    updateVMCount();
-    showNotification(`VM "${vm.name}" removed successfully!`, "success");
-    if (virtualMachines.length === 0 && autoProcessInterval) {
-      stopAutoProcessGeneration();
-      document.getElementById("autoProcessToggle").checked = false;
-    }
-  }
-}
-
-function removeProcess(idx) {
-  const process = processes[idx];
-  if (confirm(`Remove process ${process.pid}?`)) {
-    processes.splice(idx, 1);
-    updateProcessTable();
-    updateProcessCount();
-    showNotification(
-      `Process "${process.pid}" removed successfully!`,
-      "success"
-    );
-  }
-}
-
-function clearAllVMs() {
-  if (virtualMachines.length === 0) return;
-  if (confirm("Clear all virtual machines? Processes will be moved to Host.")) {
-    processes.forEach((p) => (p.vm = "Host"));
-    virtualMachines = [];
-    updateVMTable();
-    updateVMDropdown();
-    updateProcessTable();
-    updateVMCount();
-    showNotification("All VMs cleared!", "success");
-    if (autoProcessInterval) {
-      stopAutoProcessGeneration();
-      document.getElementById("autoProcessToggle").checked = false;
-    }
-  }
-}
-
-function clearAllProcesses() {
-  if (processes.length === 0) return;
-  if (confirm("Clear all processes?")) {
-    processes = [];
-    processCounter = 1;
-    updateProcessTable();
-    updateProcessCount();
-    showNotification("All processes cleared!", "success");
-  }
-}
-
-function loadSampleVMs() {
-  virtualMachines = [
-    {
-      name: "VM1",
-      priority: 2,
-      cpuShare: 40,
-      memory: 1024,
-      type: "compute",
-      status: "active",
-    },
-    {
-      name: "VM2",
-      priority: 5,
-      cpuShare: 30,
-      memory: 512,
-      type: "standard",
-      status: "active",
-    },
-    {
-      name: "VM3",
-      priority: 8,
-      cpuShare: 30,
-      memory: 2048,
-      type: "memory",
-      status: "active",
-    },
-  ];
-  updateVMTable();
-  updateVMDropdown();
-  updateVMCount();
-  showNotification("Sample VMs loaded!", "success");
-}
-
-function loadBalancedVMs() {
-  virtualMachines = [
-    {
-      name: "Web-VM",
-      priority: 3,
-      cpuShare: 25,
-      memory: 512,
-      type: "standard",
-      status: "active",
-    },
-    {
-      name: "DB-VM",
-      priority: 1,
-      cpuShare: 35,
-      memory: 2048,
-      type: "memory",
-      status: "active",
-    },
-    {
-      name: "App-VM",
-      priority: 2,
-      cpuShare: 25,
-      memory: 1024,
-      type: "compute",
-      status: "active",
-    },
-    {
-      name: "Cache-VM",
-      priority: 4,
-      cpuShare: 15,
-      memory: 512,
-      type: "realtime",
-      status: "active",
-    },
-  ];
-  updateVMTable();
-  updateVMDropdown();
-  updateVMCount();
-  showNotification("Balanced VM setup loaded!", "success");
-}
-
-function loadSampleProcesses() {
-  processes = [
-    {
-      pid: "P1",
-      arrival: 0,
-      burst: 5,
-      priority: 2,
-      ioTime: 1,
-      memReq: 128,
-      vm: "Host",
-      originalBurst: 5,
-    },
-    {
-      pid: "P2",
-      arrival: 1,
-      burst: 3,
-      priority: 1,
-      ioTime: 0,
-      memReq: 64,
-      vm: "Host",
-      originalBurst: 3,
-    },
-    {
-      pid: "P3",
-      arrival: 2,
-      burst: 8,
-      priority: 3,
-      ioTime: 2,
-      memReq: 256,
-      vm: "Host",
-      originalBurst: 8,
-    },
-    {
-      pid: "P4",
-      arrival: 3,
-      burst: 6,
-      priority: 2,
-      ioTime: 1,
-      memReq: 128,
-      vm: "Host",
-      originalBurst: 6,
-    },
-  ];
-  updateProcessTable();
-  updateProcessCount();
-  showNotification("Sample processes loaded!", "success");
-}
-
-function loadIOIntensiveProcesses() {
-  processes = [
-    {
-      pid: "IO1",
-      arrival: 0,
-      burst: 4,
-      priority: 3,
-      ioTime: 3,
-      memReq: 64,
-      vm: "Host",
-      originalBurst: 4,
-    },
-    {
-      pid: "IO2",
-      arrival: 1,
-      burst: 3,
-      priority: 4,
-      ioTime: 4,
-      memReq: 128,
-      vm: "Host",
-      originalBurst: 3,
-    },
-    {
-      pid: "IO3",
-      arrival: 2,
-      burst: 5,
-      priority: 3,
-      ioTime: 3,
-      memReq: 64,
-      vm: "Host",
-      originalBurst: 5,
-    },
-    {
-      pid: "IO4",
-      arrival: 3,
-      burst: 2,
-      priority: 5,
-      ioTime: 5,
-      memReq: 128,
-      vm: "Host",
-      originalBurst: 2,
-    },
-  ];
-  updateProcessTable();
-  updateProcessCount();
-  showNotification("I/O intensive processes loaded!", "success");
-}
-
-function loadCPUIntensiveProcesses() {
-  processes = [
-    {
-      pid: "CPU1",
-      arrival: 0,
-      burst: 10,
-      priority: 1,
-      ioTime: 0,
-      memReq: 512,
-      vm: "Host",
-      originalBurst: 10,
-    },
-    {
-      pid: "CPU2",
-      arrival: 1,
-      burst: 15,
-      priority: 2,
-      ioTime: 1,
-      memReq: 256,
-      vm: "Host",
-      originalBurst: 15,
-    },
-    {
-      pid: "CPU3",
-      arrival: 2,
-      burst: 12,
-      priority: 1,
-      ioTime: 0,
-      memReq: 1024,
-      vm: "Host",
-      originalBurst: 12,
-    },
-    {
-      pid: "CPU4",
-      arrival: 3,
-      burst: 8,
-      priority: 3,
-      ioTime: 1,
-      memReq: 256,
-      vm: "Host",
-      originalBurst: 8,
-    },
-  ];
-  updateProcessTable();
-  updateProcessCount();
-  showNotification("CPU intensive processes loaded!", "success");
+  const data = await response.json().catch(() => ({}));
+  if (data.error) throw new Error(data.error);
+  if (!response.ok) throw new Error(`The server answered ${response.status}.`);
+  return data;
 }
 
 async function runSimulation() {
-  const algo = document.getElementById("algorithm").value;
-  const quantum = parseInt(document.getElementById("quantum").value) || 2;
-  const hypervisorMode = document.getElementById("hypervisorMode").checked;
-
-  if (!algo) {
-    showNotification("Please select a scheduling algorithm!", "error");
+  const algos = selectedAlgorithms();
+  const quantum = parseInt($("quantum").value, 10);
+  if (!state.processes.length) {
+    showNotification("Add at least one process, or load a preset.", "error");
     return;
   }
-  if (processes.length === 0) {
-    showNotification("Please add at least one process!", "error");
+  if (!algos.length) {
+    showNotification("Pick at least one algorithm to compare.", "error");
     return;
   }
-  if ((algo === "RR" || algo === "MLFQ") && quantum <= 0) {
-    showNotification("Please enter a valid time quantum!", "error");
+  if (algos.some((a) => a === "RR" || a === "MLFQ") && !(quantum >= 1)) {
+    showNotification("Round Robin and MLFQ need a quantum of at least 1.", "error");
     return;
   }
 
-  document.getElementById("results").style.display = "block";
-  showNotification("Running simulation...", "info");
+  const wantsHv = $("hypervisorMode").checked;
+  const hv = wantsHv && state.vms.length > 0;
+  if (wantsHv && !hv) showNotification("No VMs defined, so this run skips the hypervisor layer.", "info");
 
-  try {
-    if (hypervisorMode && virtualMachines.length > 0) {
-      await simulateHypervisor();
-    } else {
-      await simulateNormal();
-    }
-    showNotification("Simulation completed successfully!", "success");
-  } catch (error) {
-    console.error("Simulation error:", error);
-    showNotification("Simulation failed: " + error.message, "error");
-  }
+  const seq = ++runSeq;
+  const btn = $("runBtn");
+  btn.disabled = true;
+  btn.setAttribute("aria-busy", "true");
+
+  const settled = await Promise.allSettled(
+    algos.map((algo) => post(hv ? PHP_BACKEND.hypervisor : PHP_BACKEND.simulate, buildPayload(algo, hv)))
+  );
+  if (seq !== runSeq) return; // a newer run superseded this one
+  btn.disabled = false;
+  btn.removeAttribute("aria-busy");
+
+  const failed = settled.find((r) => r.status === "rejected");
+  if (failed) showNotification(failed.reason.message, "error");
+
+  const runs = settled
+    .map((r, i) => (r.status === "fulfilled" ? { algo: algos[i], data: r.value, metrics: metricsOf(r.value) } : null))
+    .filter(Boolean);
+  if (!runs.length) return;
+
+  state.runs = runs;
+  state.hv = hv;
+  state.hasRun = true;
+  state.stale = false;
+  state.hoverPid = null;
+  if (!runs.some((r) => r.algo === state.selected)) state.selected = runs[0].algo;
+  if (state.clock !== null && state.clock > timelineEnd()) state.clock = null;
+
+  $("chartWrap").classList.remove("is-stale");
+  $("staleBanner").hidden = true;
+  document.body.classList.toggle("is-hv", hv);
+
+  renderResults();
+  revealChart();
 }
 
-async function simulateNormal() {
-  const algo = document.getElementById("algorithm").value;
-  const quantum = parseInt(document.getElementById("quantum").value) || 2;
-  const csOverhead =
-    parseFloat(document.getElementById("contextSwitchOverhead").value) || 0;
-
-  const payload = {
-    algorithm: algo,
-    quantum: quantum,
-    processes: processes,
-    csOverhead: csOverhead,
+function metricsOf(data) {
+  const rows = data.results;
+  const n = rows.length || 1;
+  const sum = (key) => rows.reduce((s, p) => s + p[key], 0);
+  const makespan = rows.reduce((m, p) => Math.max(m, p.completion), 0) || 1;
+  return {
+    turnaround: sum("turnaround") / n,
+    waiting: sum("waiting") / n,
+    response: sum("response") / n,
+    throughput: rows.length / makespan,
+    busy: (sum("burst") / makespan) * 100,
+    switches: data.contextSwitches || 0,
+    migrations: data.totalMigrations || 0,
   };
+}
 
-  try {
-    const response = await fetch(PHP_BACKEND.simulate, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+function timelineEnd() {
+  return (
+    state.runs.reduce((m, r) => r.data.segments.reduce((mm, s) => Math.max(mm, s.end), m), 0) || 1
+  );
+}
+
+/* ---------------- Results ---------------- */
+
+function renderResults() {
+  $("chartEmpty").hidden = state.runs.length > 0;
+  $("leagueSection").hidden = !state.runs.length;
+  $("detailSection").hidden = !state.runs.length;
+  renderLeague();
+  renderLegend();
+  renderDetail();
+  renderReadout();
+  drawChart();
+}
+
+const LEAGUE_COLS = [
+  { key: "turnaround", better: "min", digits: 2 },
+  { key: "waiting", better: "min", digits: 2 },
+  { key: "response", better: "min", digits: 2 },
+  { key: "throughput", better: "max", digits: 3 },
+  { key: "busy", better: "max", digits: 1, suffix: "%" },
+  { key: "switches", better: "min", digits: 0 },
+  { key: "migrations", better: null, digits: 0, hvOnly: true },
+];
+
+function renderLeague() {
+  const tbody = document.querySelector("#leagueTable tbody");
+  const best = {};
+  LEAGUE_COLS.forEach((c) => {
+    if (!c.better || state.runs.length < 2) return;
+    const values = state.runs.map((r) => r.metrics[c.key]);
+    const target = c.better === "min" ? Math.min(...values) : Math.max(...values);
+    if (values.some((v) => v !== target)) best[c.key] = target;
+  });
+
+  tbody.innerHTML = state.runs
+    .map((r) => {
+      const cells = LEAGUE_COLS.map((c) => {
+        const v = r.metrics[c.key];
+        const isBest = best[c.key] !== undefined && v === best[c.key];
+        const cls = ["num", c.hvOnly ? "hv-only" : "", isBest ? "best" : ""].join(" ");
+        return `<td class="${cls}">${fmt(v, c.digits)}${c.suffix || ""}${isBest ? '<span class="visually-hidden"> (best)</span>' : ""}</td>`;
+      }).join("");
+      return `<tr data-algo="${r.algo}" tabindex="0" aria-selected="${r.algo === state.selected}">
+        <td>${ALGO_LABELS[r.algo]}</td>${cells}</tr>`;
+    })
+    .join("");
+
+  tbody.querySelectorAll("tr").forEach((tr) => {
+    tr.addEventListener("click", () => selectRun(tr.dataset.algo));
+    tr.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        selectRun(tr.dataset.algo);
+      }
     });
-
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    const data = await response.json();
-    if (data.error) throw new Error(data.error);
-
-    simulationResults = data;
-    renderResults(data);
-    updateResourceMonitor(data);
-  } catch (error) {
-    console.error("Backend error:", error);
-    throw new Error(
-      "Failed to connect to PHP backend. Make sure simulate.php is accessible."
-    );
-  }
+  });
 }
 
-async function simulateHypervisor() {
-  const algo = document.getElementById("algorithm").value;
-  const quantum = parseInt(document.getElementById("quantum").value) || 2;
-  const vmScheduler = document.getElementById("vmScheduler").value;
-  const vmQuantum = parseInt(document.getElementById("vmQuantum").value) || 10;
-  const enableMigration = document.getElementById("enableMigration").checked;
-  const enableOvercommit = document.getElementById("enableOvercommit").checked;
-  const enableIOScheduling =
-    document.getElementById("enableIOScheduling").checked;
-  const enableCaching = document.getElementById("enableCaching").checked;
-  const csOverhead =
-    parseFloat(document.getElementById("contextSwitchOverhead").value) || 0;
-  const migrationPenalty =
-    parseInt(document.getElementById("migrationPenalty").value) || 5;
+function selectRun(algo) {
+  if (!state.runs.some((r) => r.algo === algo)) return;
+  state.selected = algo;
+  document
+    .querySelectorAll("#leagueTable tbody tr")
+    .forEach((tr) => tr.setAttribute("aria-selected", tr.dataset.algo === algo));
+  renderDetail();
+  drawChart();
+}
 
-  const payload = {
-    processAlgo: algo,
-    processQuantum: quantum,
-    processes: processes,
-    vms: virtualMachines,
-    vmScheduler: vmScheduler,
-    vmQuantum: vmQuantum,
-    enableMigration: enableMigration,
-    enableOvercommit: enableOvercommit,
-    enableIOScheduling: enableIOScheduling,
-    enableCaching: enableCaching,
-    csOverhead: csOverhead,
-    migrationPenalty: migrationPenalty,
-  };
+function renderLegend() {
+  const pids = [...new Set(state.runs.flatMap((r) => r.data.results.map((p) => p.pid)))];
+  const segs = state.runs.flatMap((r) => r.data.segments);
+  const has = (pid) => segs.some((s) => s.pid === pid);
+  let html = pids
+    .map((pid) => `<span class="legend-item"><i class="swatch" style="background:${colorFor(pid)}"></i>${esc(pid)}</span>`)
+    .join("");
+  html += `<span class="legend-item"><i class="swatch dep"></i>Departure (process done)</span>`;
+  if (has("CS")) html += `<span class="legend-item"><i class="swatch cs"></i>Context switch / overhead</span>`;
+  if (has("IDLE")) html += `<span class="legend-item"><i class="swatch idle"></i>Idle</span>`;
+  if (has("MIGRATION")) html += `<span class="legend-item"><i class="swatch mig"></i>Migration</span>`;
+  $("legend").innerHTML = html;
+}
 
-  try {
-    const response = await fetch(PHP_BACKEND.hypervisor, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+function renderDetail() {
+  const run = state.runs.find((r) => r.algo === state.selected);
+  if (!run) return;
+
+  const tabsEl = $("detailTabs");
+  tabsEl.innerHTML = state.runs
+    .map(
+      (r) =>
+        `<button type="button" role="tab" data-algo="${r.algo}" aria-selected="${r.algo === state.selected}" tabindex="${r.algo === state.selected ? 0 : -1}">${ALGO_LABELS[r.algo]}</button>`
+    )
+    .join("");
+  tabsEl.querySelectorAll("button").forEach((b) => {
+    b.addEventListener("click", () => selectRun(b.dataset.algo));
+    b.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+      const list = state.runs.map((r) => r.algo);
+      const i = list.indexOf(b.dataset.algo) + (e.key === "ArrowRight" ? 1 : -1);
+      const next = list[(i + list.length) % list.length];
+      selectRun(next);
+      tabsEl.querySelector(`[data-algo="${next}"]`).focus();
     });
+  });
 
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    const data = await response.json();
-    if (data.error) throw new Error(data.error);
-
-    simulationResults = data;
-    renderEnhancedResults(data);
-    updateResourceMonitor(data);
-  } catch (error) {
-    console.error("Backend error:", error);
-    throw new Error(
-      "Failed to connect to PHP backend. Make sure simulate_hypervisor.php is accessible."
-    );
-  }
-}
-
-function renderResults(data) {
-  renderTable(data.results);
-  renderAverages(data.results, data.contextSwitches, data.totalMigrations);
-  renderGantt(data.segments);
-  renderLegend(data.segments);
-  if (data.vmStats) renderVMStats(data.vmStats);
-}
-
-function renderTable(data) {
   const tbody = document.querySelector("#resultTable tbody");
-  tbody.innerHTML = "";
-  data.forEach((p) => {
-    tbody.innerHTML += `<tr>
-      <td><strong>${p.pid}</strong></td>
-      <td><span class="process-badge">${p.vm}</span></td>
-      <td>${p.arrival}</td><td>${p.burst}</td><td>${p.completion}</td>
-      <td>${p.turnaround}</td><td>${p.waiting}</td><td>${p.response}</td>
-      <td>${p.contextSwitches || 0}</td>
-    </tr>`;
+  tbody.innerHTML = run.data.results
+    .map(
+      (p) => `<tr data-pid="${esc(p.pid)}">
+        <td><span class="pid"><i class="swatch" style="background:${colorFor(p.pid)}"></i>${esc(p.pid)}</span></td>
+        <td>${p.vm === "Host" ? "Host" : `<span class="tag">${esc(p.vm)}</span>`}</td>
+        <td class="num">${fmtTime(p.arrival)}</td>
+        <td class="num">${fmtTime(p.burst)}</td>
+        <td class="num">${fmtTime(p.completion)}</td>
+        <td class="num">${fmtTime(p.turnaround)}</td>
+        <td class="num">${fmtTime(p.waiting)}</td>
+        <td class="num">${fmtTime(p.response)}</td>
+        <td class="num">${esc(p.contextSwitches)}</td>
+      </tr>`
+    )
+    .join("");
+  tbody.querySelectorAll("tr").forEach((tr) => {
+    tr.addEventListener("mouseenter", () => setHover(tr.dataset.pid));
+    tr.addEventListener("mouseleave", () => setHover(null));
   });
+
+  renderHvDetail(run);
 }
 
-function renderAverages(data, contextSwitches, migrations) {
-  const avgTAT = data.reduce((sum, p) => sum + p.turnaround, 0) / data.length;
-  const avgWT = data.reduce((sum, p) => sum + p.waiting, 0) / data.length;
-  const avgRT = data.reduce((sum, p) => sum + p.response, 0) / data.length;
-  const maxCompletion = Math.max(...data.map((p) => p.completion));
-  const throughput = data.length / maxCompletion;
-  const cpuUtilization =
-    (data.reduce((sum, p) => sum + p.burst, 0) / maxCompletion) * 100;
-  let migrationsText = migrations
-    ? ` | 🔄 VM Migrations: <strong>${migrations}</strong>`
-    : "";
-
-  document.getElementById("averages").innerHTML = `
-    📈 Average Turnaround Time: <strong>${avgTAT.toFixed(2)}</strong> |
-    🕒 Average Waiting Time: <strong>${avgWT.toFixed(2)}</strong> |
-    ⚡ Average Response Time: <strong>${avgRT.toFixed(2)}</strong><br>
-    🎯 Throughput: <strong>${throughput.toFixed(2)} processes/unit</strong> |
-    💻 CPU Utilization: <strong>${cpuUtilization.toFixed(2)}%</strong> |
-    🔀 Context Switches: <strong>${
-      contextSwitches || 0
-    }</strong>${migrationsText}
-  `;
-}
-
-function renderVMStats(vmStats) {
-  const statsDiv = document.getElementById("vmStats");
-  statsDiv.innerHTML = `
-    <div class="section-header">
-      <h3>🖥️ Virtual Machine Statistics</h3>
-      <div class="section-badge">Per-VM Performance</div>
-    </div>
-    <div class='vm-stats-grid'>`;
-
-  vmStats.forEach((stat) => {
-    statsDiv.innerHTML += `
-      <div class="vm-stat-card">
-        <h4>${stat.vm}</h4>
-        <div class="metric"><span>CPU Time:</span><strong>${
-          stat.cpuTime
-        } units</strong></div>
-        <div class="metric"><span>Utilization:</span><strong>${stat.utilization.toFixed(
-          2
-        )}%</strong></div>
-        <div class="metric"><span>Idle Time:</span><strong>${
-          stat.idleTime
-        } units</strong></div>
-        <div class="metric"><span>Processes:</span><strong>${
-          stat.processCount
-        }</strong></div>
-        <div class="metric"><span>Migrations:</span><strong>${
-          stat.migrations || 0
-        }</strong></div>
-      </div>`;
-  });
-  statsDiv.innerHTML += "</div>";
-}
-
-function renderLegend(segments) {
-  const legendDiv = document.getElementById("legend");
-  const colors = {};
-  const uniquePids = [...new Set(segments.map((s) => s.pid))].filter(
-    (pid) => pid !== "IDLE" && pid !== "MIGRATION"
-  );
-
-  uniquePids.forEach((pid) => {
-    colors[pid] = getColorForProcess(pid);
-  });
-
-  legendDiv.innerHTML = "<strong>Process Colors:</strong>";
-  Object.entries(colors).forEach(([pid, color]) => {
-    legendDiv.innerHTML += `<div class="legend-item"><div class="legend-color" style="background: ${color}"></div><span>${pid}</span></div>`;
-  });
-
-  legendDiv.innerHTML += `<div class="legend-item"><div class="legend-color" style="background: #333"></div><span>IDLE</span></div>`;
-
-  if (segments.some((s) => s.pid === "MIGRATION")) {
-    legendDiv.innerHTML += `<div class="legend-item"><div class="legend-color" style="background: #ff6464"></div><span>MIGRATION</span></div>`;
+function renderHvDetail(run) {
+  const box = $("hvDetail");
+  const d = run.data;
+  if (!state.hv || !d.vmStats) {
+    box.innerHTML = "";
+    return;
   }
+  const f = d.hypervisorFeatures || {};
+  const features = [
+    ["Live migration", f.migration],
+    ["Memory overcommit", f.overcommit],
+    ["I/O blocking", f.ioScheduling],
+    ["CPU cache", f.caching],
+  ]
+    .map(([label, on]) => `<li class="${on ? "on" : ""}">${label} ${on ? "on" : "off"}</li>`)
+    .join("");
+
+  let html = `<div class="hv-block">
+    <h3>Virtual machines</h3>
+    <ul class="feature-list" aria-label="Hypervisor features">${features}</ul>
+    <div class="table-scroll"><table class="data">
+      <thead><tr>
+        <th scope="col">VM</th><th scope="col" class="num">CPU time</th><th scope="col">Utilisation</th>
+        <th scope="col" class="num">Idle</th><th scope="col" class="num">Processes</th><th scope="col" class="num">Migrations</th>
+        <th scope="col" class="num">NUMA</th><th scope="col" class="num">Overcommit</th><th scope="col" class="num">Cache hits</th>
+      </tr></thead>
+      <tbody>${d.vmStats
+        .map((s) => {
+          const lookups = (s.cacheHits || 0) + (s.cacheMisses || 0);
+          const util = Math.min(100, s.utilization);
+          return `<tr>
+            <td><span class="tag">${esc(s.vm)}</span></td>
+            <td class="num">${fmtTime(s.cpuTime)}</td>
+            <td><span class="util"><span class="util-bar"><i style="width:${util}%"></i></span>${fmt(s.utilization, 1)}%</span></td>
+            <td class="num">${fmtTime(s.idleTime)}</td>
+            <td class="num">${esc(s.processCount)}</td>
+            <td class="num">${esc(s.migrations || 0)}</td>
+            <td class="num">${esc(s.numaNode)}</td>
+            <td class="num">${esc(s.overcommitEvents || 0)}</td>
+            <td class="num">${lookups ? fmt((s.cacheHits / lookups) * 100, 1) + "%" : "–"}</td>
+          </tr>`;
+        })
+        .join("")}</tbody>
+    </table></div>
+  </div>`;
+
+  if (d.migrations && d.migrations.length) {
+    html += `<div class="hv-block"><h3>Migrations</h3><div class="table-scroll"><table class="data">
+      <thead><tr><th scope="col">Process</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="num">At</th><th scope="col" class="num">Penalty</th></tr></thead>
+      <tbody>${d.migrations
+        .map(
+          (m) => `<tr><td>${esc(m.process)}</td><td><span class="tag">${esc(m.fromVM)}</span></td><td><span class="tag">${esc(m.toVM)}</span></td>
+          <td class="num">${fmtTime(m.time)}</td><td class="num">${esc(m.penalty)}</td></tr>`
+        )
+        .join("")}</tbody></table></div></div>`;
+  }
+
+  if (d.cacheStats) {
+    const c = d.cacheStats;
+    html += `<div class="hv-block"><h3>CPU cache</h3>
+      <p class="readout"><b>${esc(c.hits)}</b> hits, <b>${esc(c.misses)}</b> misses, hit rate <b>${fmt(c.hitRate, 1)}%</b>. Each miss adds 2 time units before the process runs.</p></div>`;
+  }
+
+  if (d.ioSchedule && d.ioSchedule.length) {
+    html += `<div class="hv-block"><h3>I/O operations</h3>
+      <p class="readout">Each process with I/O time blocks halfway through its burst; the device serves requests in order.</p>
+      <div class="table-scroll"><table class="data">
+      <thead><tr><th scope="col">Process</th><th scope="col">VM</th><th scope="col" class="num">Start</th><th scope="col" class="num">Duration</th><th scope="col" class="num">Priority</th></tr></thead>
+      <tbody>${d.ioSchedule
+        .map(
+          (io) => `<tr><td>${esc(io.pid)}</td><td><span class="tag">${esc(io.vm)}</span></td>
+          <td class="num">${fmtTime(io.startTime)}</td><td class="num">${esc(io.ioTime)}</td><td class="num">${esc(io.priority)}</td></tr>`
+        )
+        .join("")}</tbody></table></div></div>`;
+  }
+
+  box.innerHTML = html;
 }
 
-function getColorForProcess(pid) {
-  const hash = pid
-    .split("")
-    .reduce((acc, char) => char.charCodeAt(0) + ((acc << 5) - acc), 0);
-  const hue = Math.abs(hash) % 360;
-  return `hsl(${hue}, 70%, 60%)`;
+/* ---------------- Timetable chart ---------------- */
+
+const canvas = $("timetable");
+const ctx = canvas.getContext("2d");
+const G = { left: 132, right: 28, axis: 34, arrivals: 34, track: 54, bottom: 14, bar: 26 };
+const COND = `"Barlow Semi Condensed", Barlow, sans-serif`;
+
+function niceStep(span, maxTicks) {
+  const raw = span / Math.max(1, maxTicks);
+  const pow = 10 ** Math.floor(Math.log10(raw));
+  return Math.max([1, 2, 5, 10].find((m) => m * pow >= raw) * pow, 1);
 }
 
-function renderGantt(segments) {
-  const canvas = document.getElementById("ganttChart");
-  const ctx = canvas.getContext("2d");
-
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!segments || segments.length === 0) return;
-
-  const endTime = Math.max(...segments.map((s) => s.end));
-  canvas.width = canvas.parentElement.offsetWidth;
-  canvas.height = 200;
-  const scale = (canvas.width - 40) / endTime;
-
-  const colors = {};
-  segments.forEach((s) => {
-    if (!colors[s.pid] && s.pid !== "IDLE" && s.pid !== "MIGRATION") {
-      colors[s.pid] = getColorForProcess(s.pid);
-    }
-  });
-
-  segments.forEach((s, idx) => {
-    const x = 20 + s.start * scale;
-    const width = (s.end - s.start) * scale;
-    const y = 50;
-    const height = 80;
-
-    if (s.pid === "IDLE") {
-      ctx.fillStyle = "#333";
-    } else if (s.pid === "MIGRATION") {
-      ctx.fillStyle = "#ff6464";
-    } else {
-      ctx.fillStyle = colors[s.pid];
-    }
-    ctx.fillRect(x, y, width, height);
-
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x, y, width, height);
-
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 14px Inter";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-
-    if (width > 30) {
-      if (s.pid === "MIGRATION") {
-        ctx.fillText("🔄", x + width / 2, y + height / 2);
-      } else {
-        ctx.fillText(s.pid, x + width / 2, y + height / 2 - 8);
-
-        if (s.vm && s.vm !== "Host") {
-          ctx.font = "10px Inter";
-          ctx.fillText(`[${s.vm}]`, x + width / 2, y + height / 2 + 10);
-        }
-      }
-    }
-
-    ctx.font = "11px Inter";
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#00ffcc";
-    if (idx === 0 || segments[idx - 1].end !== s.start) {
-      ctx.fillText(s.start, x, y + height + 20);
-    }
-  });
-
-  const lastSegment = segments[segments.length - 1];
-  const finalX = 20 + lastSegment.end * scale;
-  ctx.fillStyle = "#00ffcc";
-  ctx.font = "11px Inter";
-  ctx.textAlign = "center";
-  ctx.fillText(lastSegment.end, finalX, 150);
+function segmentAt(run, t) {
+  return run.data.segments.find((s) => s.start <= t && t < s.end) || null;
 }
 
-function updateResourceMonitor(data) {
-  const monitorDiv = document.getElementById("resourceMonitor");
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
 
-  if (!data || !data.results) {
-    monitorDiv.innerHTML = `
-      <div class="monitor-placeholder">
-        <div class="placeholder-icon">📊</div>
-        <p>No simulation data available</p>
-        <span>Run a simulation to see resource utilization</span>
-      </div>`;
+function drawChart() {
+  const runs = state.runs;
+  const wrap = $("chartWrap");
+  if (!runs.length) {
+    canvas.style.height = "0px";
+    state.geom = null;
     return;
   }
 
-  const maxCompletion = Math.max(...data.results.map((p) => p.completion));
-  const totalBurst = data.results.reduce((sum, p) => sum + p.burst, 0);
-  const cpuUtilization = (totalBurst / maxCompletion) * 100;
+  const ink = cssVar("--ink");
+  const ink2 = cssVar("--ink-2");
+  const ink3 = cssVar("--ink-3");
+  const rule = cssVar("--rule");
+  const ruleStrong = cssVar("--rule-strong");
+  const blue = cssVar("--blue");
+  const blueWash = cssVar("--blue-wash");
+  const signal = cssVar("--signal");
 
-  monitorDiv.innerHTML = `
-    <h4 style="color: #00ffcc; margin-bottom: 24px; font-size: 1.3em;">Overall System Utilization</h4>
+  const W = wrap.clientWidth;
+  const left = W < 520 ? 92 : G.left;
+  const H = G.axis + G.arrivals + runs.length * G.track + G.bottom;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.style.height = `${H}px`;
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
 
-    <div style="margin-bottom: 24px;">
-      <label style="color: #aaa; font-weight: 600;">CPU Utilization: <strong style="color: #00ffcc;">${cpuUtilization.toFixed(
-        2
-      )}%</strong></label>
-      <div class="resource-bar">
-        <div class="resource-bar-fill" style="width: ${cpuUtilization}%">${cpuUtilization.toFixed(
-    1
-  )}%</div>
-      </div>
-    </div>
+  const end = timelineEnd();
+  const plotW = Math.max(40, W - left - G.right);
+  const x = (t) => left + (t / end) * plotW;
+  const tracksTop = G.axis + G.arrivals;
+  state.geom = { left, plotW, end, top: tracksTop };
 
-    <div style="margin-bottom: 24px;">
-      <label style="color: #aaa; font-weight: 600;">Throughput: <strong style="color: #00ffcc;">${(
-        data.results.length / maxCompletion
-      ).toFixed(2)} proc/unit</strong></label>
-      <div class="resource-bar">
-        <div class="resource-bar-fill" style="width: ${Math.min(
-          100,
-          (data.results.length / maxCompletion) * 50
-        )}%; background: linear-gradient(90deg, #6464ff, #8484ff)">
-          ${(data.results.length / maxCompletion).toFixed(2)}
-        </div>
-      </div>
-    </div>
-
-    <div style="margin-bottom: 24px;">
-      <label style="color: #aaa; font-weight: 600;">Average Response Time: <strong style="color: #00ffcc;">${(
-        data.results.reduce((sum, p) => sum + p.response, 0) /
-        data.results.length
-      ).toFixed(2)} units</strong></label>
-      <div class="resource-bar">
-        <div class="resource-bar-fill" style="width: ${Math.min(
-          100,
-          (data.results.reduce((sum, p) => sum + p.response, 0) /
-            data.results.length) *
-            10
-        )}%; background: linear-gradient(90deg, #ff6464, #ff8484)">
-          ${(
-            data.results.reduce((sum, p) => sum + p.response, 0) /
-            data.results.length
-          ).toFixed(2)}
-        </div>
-      </div>
-    </div>
-  `;
-
-  if (data.vmStats && data.vmStats.length > 0) {
-    monitorDiv.innerHTML +=
-      '<h4 style="color: #00ffcc; margin: 35px 0 24px 0; font-size: 1.3em;">Per-VM Utilization</h4>';
-
-    data.vmStats.forEach((vm) => {
-      monitorDiv.innerHTML += `
-        <div style="margin-bottom: 24px;">
-          <label style="color: #aaa; font-weight: 600;">${
-            vm.vm
-          }: <strong style="color: #00ffcc;">${vm.utilization.toFixed(
-        2
-      )}%</strong> (${vm.processCount} processes)</label>
-          <div class="resource-bar">
-            <div class="resource-bar-fill" style="width: ${
-              vm.utilization
-            }%">${vm.utilization.toFixed(1)}%</div>
-          </div>
-        </div>
-      `;
-    });
-  }
-
-  const avgTAT =
-    data.results.reduce((sum, p) => sum + p.turnaround, 0) /
-    data.results.length;
-  const avgWT =
-    data.results.reduce((sum, p) => sum + p.waiting, 0) / data.results.length;
-
-  monitorDiv.innerHTML += `
-    <h4 style="color: #00ffcc; margin: 35px 0 24px 0; font-size: 1.3em;">Performance Metrics</h4>
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px;">
-      <div style="background: linear-gradient(135deg, rgba(0, 255, 204, 0.15) 0%, rgba(0, 255, 204, 0.05) 100%); padding: 20px; border-radius: 12px; border-left: 4px solid #00ffcc; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);">
-        <div style="color: #aaa; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Avg Turnaround</div>
-        <div style="color: #00ffcc; font-size: 28px; font-weight: 900;">${avgTAT.toFixed(
-          2
-        )}</div>
-      </div>
-      <div style="background: linear-gradient(135deg, rgba(100, 100, 255, 0.15) 0%, rgba(100, 100, 255, 0.05) 100%); padding: 20px; border-radius: 12px; border-left: 4px solid #6464ff; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);">
-        <div style="color: #aaa; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Avg Waiting</div>
-        <div style="color: #6464ff; font-size: 28px; font-weight: 900;">${avgWT.toFixed(
-          2
-        )}</div>
-      </div>
-      <div style="background: linear-gradient(135deg, rgba(255, 100, 100, 0.15) 0%, rgba(255, 100, 100, 0.05) 100%); padding: 20px; border-radius: 12px; border-left: 4px solid #ff6464; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);">
-        <div style="color: #aaa; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Context Switches</div>
-        <div style="color: #ff6464; font-size: 28px; font-weight: 900;">${
-          data.contextSwitches || 0
-        }</div>
-      </div>
-      ${
-        data.totalMigrations
-          ? `
-      <div style="background: linear-gradient(135deg, rgba(255, 153, 68, 0.15) 0%, rgba(255, 153, 68, 0.05) 100%); padding: 20px; border-radius: 12px; border-left: 4px solid #ff9944; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);">
-        <div style="color: #aaa; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">VM Migrations</div>
-        <div style="color: #ff9944; font-size: 28px; font-weight: 900;">${data.totalMigrations}</div>
-      </div>
-      `
-          : ""
-      }
-    </div>
-  `;
-}
-
-function renderEnhancedResults(data) {
-  // Clear previous enhanced content
-  const resultsDiv = document.getElementById("results");
-  const existingSections = resultsDiv.querySelectorAll(
-    ".migration-section, .cache-section, .io-section, .features-section"
-  );
-  existingSections.forEach((section) => section.remove());
-
-  renderTable(data.results);
-  renderAverages(data.results, data.contextSwitches, data.totalMigrations);
-  renderGantt(data.segments);
-  renderLegend(data.segments);
-
-  if (data.vmStats) {
-    renderEnhancedVMStats(data.vmStats);
-  }
-
-  if (data.hypervisorFeatures) {
-    renderHypervisorFeatures(data.hypervisorFeatures);
-  }
-
-  if (data.migrations && data.migrations.length > 0) {
-    renderMigrationTimeline(data.migrations);
-  }
-
-  if (data.cacheStats) {
-    renderCacheStatistics(data.cacheStats);
-  }
-
-  if (data.ioSchedule && data.ioSchedule.length > 0) {
-    renderIOSchedule(data.ioSchedule);
-  }
-}
-
-function renderEnhancedVMStats(vmStats) {
-  const statsDiv = document.getElementById("vmStats");
-  statsDiv.innerHTML = `
-    <div class="section-header">
-      <h3>🖥️ Virtual Machine Statistics</h3>
-      <div class="section-badge">Enhanced Hypervisor Metrics</div>
-    </div>
-    <div class='vm-stats-grid'>`;
-
-  vmStats.forEach((stat) => {
-    const overcommitBadge =
-      stat.overcommitEvents && stat.overcommitEvents > 0
-        ? `<div class="metric warning-metric">
-           <span>⚠️ Overcommit Events:</span>
-           <strong>${stat.overcommitEvents}</strong>
-         </div>`
-        : "";
-
-    const cacheBadge =
-      stat.cacheHits &&
-      stat.cacheMisses &&
-      stat.cacheHits + stat.cacheMisses > 0
-        ? `<div class="metric cache-metric">
-           <span>💾 Cache Hit Rate:</span>
-           <strong>${(
-             (stat.cacheHits / (stat.cacheHits + stat.cacheMisses)) *
-             100
-           ).toFixed(1)}%</strong>
-         </div>`
-        : "";
-
-    const numaInfo =
-      stat.numaNode !== undefined
-        ? `<div class="metric">
-           <span>🔢 NUMA Node:</span>
-           <strong>Node ${stat.numaNode}</strong>
-         </div>`
-        : "";
-
-    statsDiv.innerHTML += `
-      <div class="vm-stat-card enhanced">
-        <h4>${stat.vm}</h4>
-        <div class="metric">
-          <span>CPU Time:</span>
-          <strong>${stat.cpuTime} units</strong>
-        </div>
-        <div class="metric">
-          <span>Utilization:</span>
-          <strong class="${
-            stat.utilization > 80 ? "high-util" : ""
-          }">${stat.utilization.toFixed(2)}%</strong>
-        </div>
-        <div class="metric">
-          <span>Idle Time:</span>
-          <strong>${stat.idleTime} units</strong>
-        </div>
-        <div class="metric">
-          <span>Processes:</span>
-          <strong>${stat.processCount}</strong>
-        </div>
-        <div class="metric">
-          <span>Migrations:</span>
-          <strong>${stat.migrations || 0}</strong>
-        </div>
-        ${numaInfo}
-        ${overcommitBadge}
-        ${cacheBadge}
-      </div>`;
+  // Selected track band
+  runs.forEach((r, i) => {
+    if (r.algo !== state.selected) return;
+    ctx.fillStyle = blueWash;
+    ctx.fillRect(0, tracksTop + i * G.track, W, G.track);
   });
 
-  statsDiv.innerHTML += "</div>";
-}
+  // Clock grid: every tick ruled, every fifth heavier, like timetable hour columns
+  const step = niceStep(end, plotW / 64);
+  ctx.font = `600 12px ${COND}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  for (let t = 0, k = 0; t <= end + 1e-9; t += step, k++) {
+    const gx = Math.round(x(t)) + 0.5;
+    ctx.strokeStyle = k % 5 === 0 ? ruleStrong : rule;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(gx, G.axis - 6);
+    ctx.lineTo(gx, H - G.bottom);
+    ctx.stroke();
+    ctx.fillStyle = k % 5 === 0 ? ink : ink3;
+    ctx.fillText(fmtTime(t), gx, G.axis / 2);
+  }
 
-function renderMigrationTimeline(migrations) {
-  const resultsDiv = document.getElementById("results");
-
-  const migrationSection = document.createElement("div");
-  migrationSection.className = "migration-section";
-  migrationSection.innerHTML = `
-    <div class="section-header">
-      <h3>🔄 Process Migration Timeline</h3>
-      <div class="section-badge">${migrations.length} Migrations</div>
-    </div>
-    <div class="migration-timeline">
-      ${migrations
-        .map(
-          (m) => `
-        <div class="migration-event">
-          <div class="migration-icon">🔄</div>
-          <div class="migration-details">
-            <strong>${m.process}</strong>
-            <span class="migration-path">${m.fromVM} → ${m.toVM}</span>
-            <span class="migration-time">Time: ${m.time} (Penalty: ${m.penalty})</span>
-          </div>
-        </div>
-      `
-        )
-        .join("")}
-    </div>
-  `;
-
-  resultsDiv.appendChild(migrationSection);
-}
-
-function renderCacheStatistics(cacheStats) {
-  const resultsDiv = document.getElementById("results");
-
-  const cacheSection = document.createElement("div");
-  cacheSection.className = "cache-section";
-  cacheSection.innerHTML = `
-    <div class="section-header">
-      <h3>💾 CPU Cache Statistics</h3>
-      <div class="section-badge">Cache Performance</div>
-    </div>
-    <div class="cache-stats">
-      <div class="cache-stat-card">
-        <div class="cache-stat-icon">✅</div>
-        <div class="cache-stat-value">${cacheStats.hits}</div>
-        <div class="cache-stat-label">Cache Hits</div>
-      </div>
-      <div class="cache-stat-card">
-        <div class="cache-stat-icon">❌</div>
-        <div class="cache-stat-value">${cacheStats.misses}</div>
-        <div class="cache-stat-label">Cache Misses</div>
-      </div>
-      <div class="cache-stat-card highlight">
-        <div class="cache-stat-icon">📊</div>
-        <div class="cache-stat-value">${cacheStats.hitRate.toFixed(2)}%</div>
-        <div class="cache-stat-label">Hit Rate</div>
-      </div>
-    </div>
-    <div class="cache-explanation">
-      ${
-        cacheStats.hitRate > 70
-          ? "🎯 Excellent cache performance! Low context switching overhead."
-          : cacheStats.hitRate > 40
-          ? "⚠️ Moderate cache performance. Consider optimizing process scheduling."
-          : "❌ Poor cache performance. High thrashing detected."
+  // Arrivals row: a departure marker per process at its arrival time
+  ctx.fillStyle = ink2;
+  ctx.textAlign = "left";
+  ctx.font = `600 11px ${COND}`;
+  ctx.fillText("ARRIVALS", 12, G.axis + G.arrivals / 2);
+  let lastLabelEnd = -Infinity;
+  runs[0].data.results
+    .slice()
+    .sort((a, b) => a.arrival - b.arrival)
+    .forEach((p) => {
+      const ax = x(p.arrival);
+      ctx.globalAlpha = state.hoverPid && state.hoverPid !== p.pid ? 0.25 : 1;
+      ctx.fillStyle = colorFor(p.pid);
+      ctx.beginPath();
+      ctx.moveTo(ax - 5, G.axis + 8);
+      ctx.lineTo(ax + 5, G.axis + 8);
+      ctx.lineTo(ax, G.axis + 16);
+      ctx.closePath();
+      ctx.fill();
+      const label = String(p.pid);
+      const w = ctx.measureText(label).width;
+      if (ax - w / 2 > lastLabelEnd + 4 && ax - w / 2 > left - 8) {
+        ctx.fillStyle = ink2;
+        ctx.textAlign = "center";
+        ctx.fillText(label, ax, G.axis + 26);
+        lastLabelEnd = ax + w / 2;
       }
-    </div>
-  `;
+      ctx.globalAlpha = 1;
+    });
 
-  resultsDiv.appendChild(cacheSection);
+  // Tracks
+  const reveal = left + state.progress * plotW;
+  runs.forEach((r, i) => {
+    const y0 = tracksTop + i * G.track;
+    const mid = y0 + G.track / 2;
+    const selected = r.algo === state.selected;
+
+    ctx.textAlign = "left";
+    ctx.fillStyle = selected ? blue : ink;
+    ctx.font = `700 15px ${COND}`;
+    ctx.fillText(left < G.left ? r.algo : ALGO_LABELS[r.algo], 12, mid - 8);
+    ctx.fillStyle = ink3;
+    ctx.font = `500 12px Barlow, sans-serif`;
+    ctx.fillText(`wait ${fmt(r.metrics.waiting)}`, 12, mid + 9);
+
+    // The rail, visible wherever the CPU idles
+    ctx.strokeStyle = ruleStrong;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(left, mid);
+    ctx.lineTo(left + plotW, mid);
+    ctx.stroke();
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(left - 1, y0, Math.max(0, reveal - left + 1), G.track);
+    ctx.clip();
+
+    const top = mid - G.bar / 2;
+    ctx.font = `700 12px ${COND}`;
+    r.data.segments.forEach((s) => {
+      if (s.pid === "IDLE") return;
+      const sx = x(s.start);
+      const sw = Math.max(1, x(s.end) - sx);
+      if (s.pid === "CS" || s.pid === "MIGRATION") {
+        hatch(sx, top + 4, sw, G.bar - 8, s.pid === "CS" ? "#8a929e" : signal);
+        return;
+      }
+      ctx.globalAlpha = state.hoverPid && state.hoverPid !== s.pid ? 0.18 : 1;
+      ctx.fillStyle = colorFor(s.pid);
+      ctx.fillRect(sx, top, sw, G.bar);
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(sx + sw - 1, top, 1, G.bar); // hairline between consecutive trains
+      const label = String(s.pid);
+      if (ctx.measureText(label).width + 8 < sw) {
+        ctx.textAlign = "center";
+        ctx.fillText(label, sx + sw / 2, mid + 0.5);
+      }
+      ctx.globalAlpha = 1;
+    });
+
+    // Departure ticks: where each train finishes its run on this track
+    r.data.results.forEach((p) => {
+      const dx = Math.round(x(p.completion)) - 1;
+      ctx.globalAlpha = state.hoverPid && state.hoverPid !== p.pid ? 0.18 : 1;
+      ctx.fillStyle = colorFor(p.pid);
+      ctx.fillRect(dx, top - 6, 3, G.bar + 12);
+      ctx.globalAlpha = 1;
+    });
+    ctx.restore();
+
+    ctx.strokeStyle = rule;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, y0 + G.track - 0.5);
+    ctx.lineTo(W, y0 + G.track - 0.5);
+    ctx.stroke();
+  });
+
+  // The clock hand: one red line through every track
+  if (state.clock !== null) {
+    const cx = Math.round(x(state.clock)) + 0.5;
+    ctx.strokeStyle = signal;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx, G.axis);
+    ctx.lineTo(cx, H - G.bottom + 4);
+    ctx.stroke();
+    const label = `t ${fmtTime(state.clock)}`;
+    ctx.font = `700 12px ${COND}`;
+    const lw = ctx.measureText(label).width + 12;
+    const lx = Math.min(Math.max(cx - lw / 2, left - 4), W - lw - 2);
+    ctx.fillStyle = signal;
+    roundRect(lx, 4, lw, G.axis - 10, 3);
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.textAlign = "center";
+    ctx.fillText(label, lx + lw / 2, 4 + (G.axis - 10) / 2 + 0.5);
+  }
+
+  canvas.setAttribute(
+    "aria-label",
+    `Timetable of ${runs.length} algorithm${runs.length === 1 ? "" : "s"} over ${fmtTime(end)} time units. ` +
+      runs.map((r) => `${ALGO_LABELS[r.algo]}: average waiting ${fmt(r.metrics.waiting)}`).join("; ")
+  );
 }
 
-function renderIOSchedule(ioSchedule) {
-  const resultsDiv = document.getElementById("results");
-
-  const ioSection = document.createElement("div");
-  ioSection.className = "io-section";
-  ioSection.innerHTML = `
-    <div class="section-header">
-      <h3>💿 I/O Operation Schedule</h3>
-      <div class="section-badge">${ioSchedule.length} Operations</div>
-    </div>
-    <div class="table-wrapper">
-      <table class="io-table">
-        <thead>
-          <tr>
-            <th>Process</th>
-            <th>VM</th>
-            <th>I/O Time</th>
-            <th>Priority</th>
-            <th>Start Time</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${ioSchedule
-            .map(
-              (io) => `
-            <tr>
-              <td><strong>${io.pid}</strong></td>
-              <td><span class="process-badge">${io.vm}</span></td>
-              <td>${io.ioTime} units</td>
-              <td><span class="priority-badge priority-${io.priority}">${io.priority}</span></td>
-              <td>${io.startTime}</td>
-            </tr>
-          `
-            )
-            .join("")}
-        </tbody>
-      </table>
-    </div>
-  `;
-
-  resultsDiv.appendChild(ioSection);
+function hatch(x0, y0, w, h, color) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x0, y0, w, h);
+  ctx.clip();
+  ctx.fillStyle = "#eef0f3";
+  ctx.fillRect(x0, y0, w, h);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let k = x0 - h; k < x0 + w; k += 5) {
+    ctx.moveTo(k, y0 + h);
+    ctx.lineTo(k + h, y0);
+  }
+  ctx.stroke();
+  ctx.restore();
 }
 
-function renderHypervisorFeatures(features) {
-  const resultsDiv = document.getElementById("results");
-
-  const featuresSection = document.createElement("div");
-  featuresSection.className = "features-section";
-  featuresSection.innerHTML = `
-    <div class="section-header">
-      <h3>⚙️ Active Hypervisor Features</h3>
-    </div>
-    <div class="features-grid">
-      <div class="feature-card ${features.migration ? "enabled" : "disabled"}">
-        <div class="feature-icon">🔄</div>
-        <div class="feature-name">Live Migration</div>
-        <div class="feature-status">${
-          features.migration ? "Enabled" : "Disabled"
-        }</div>
-      </div>
-      <div class="feature-card ${features.overcommit ? "enabled" : "disabled"}">
-        <div class="feature-icon">📈</div>
-        <div class="feature-name">Overcommitment</div>
-        <div class="feature-status">${
-          features.overcommit ? "Enabled" : "Disabled"
-        }</div>
-      </div>
-      <div class="feature-card ${
-        features.ioScheduling ? "enabled" : "disabled"
-      }">
-        <div class="feature-icon">💿</div>
-        <div class="feature-name">I/O Scheduling</div>
-        <div class="feature-status">${
-          features.ioScheduling ? "Enabled" : "Disabled"
-        }</div>
-      </div>
-      <div class="feature-card ${features.caching ? "enabled" : "disabled"}">
-        <div class="feature-icon">💾</div>
-        <div class="feature-name">CPU Caching</div>
-        <div class="feature-status">${
-          features.caching ? "Enabled" : "Disabled"
-        }</div>
-      </div>
-    </div>
-  `;
-
-  resultsDiv.appendChild(featuresSection);
+function roundRect(x0, y0, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x0 + r, y0);
+  ctx.arcTo(x0 + w, y0, x0 + w, y0 + h, r);
+  ctx.arcTo(x0 + w, y0 + h, x0, y0 + h, r);
+  ctx.arcTo(x0, y0 + h, x0, y0, r);
+  ctx.arcTo(x0, y0, x0 + w, y0, r);
+  ctx.closePath();
 }
 
-// Add CSS for new visualizations
-const enhancedStyles = `
-  .migration-section, .cache-section, .io-section, .features-section {
-    margin-top: 40px;
+// The one authored motion: trains run in along every track at once, left to right.
+function revealChart() {
+  if (!window.gsap || reduceMotion.matches) {
+    state.progress = 1;
+    drawChart();
+    return;
   }
-
-  .migration-timeline {
-    display: flex;
-    flex-direction: column;
-    gap: 15px;
-    margin-top: 20px;
-  }
-
-  .migration-event {
-    display: flex;
-    align-items: center;
-    gap: 20px;
-    background: linear-gradient(135deg, rgba(255, 153, 68, 0.1) 0%, rgba(255, 153, 68, 0.05) 100%);
-    padding: 20px;
-    border-radius: 12px;
-    border-left: 4px solid #ff9944;
-  }
-
-  .migration-icon {
-    font-size: 2em;
-    animation: rotate 2s linear infinite;
-  }
-
-  .migration-details {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-  }
-
-  .migration-path {
-    color: var(--text-muted);
-    font-weight: 600;
-  }
-
-  .migration-time {
-    color: var(--primary);
-    font-size: 0.9em;
-  }
-
-  .cache-stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 20px;
-    margin: 20px 0;
-  }
-
-  .cache-stat-card {
-    background: var(--bg-input);
-    padding: 30px;
-    border-radius: 12px;
-    text-align: center;
-    border: 2px solid var(--border);
-    transition: all 0.3s;
-  }
-
-  .cache-stat-card.highlight {
-    border-color: var(--primary);
-    background: linear-gradient(135deg, rgba(0, 255, 204, 0.1) 0%, rgba(0, 255, 204, 0.05) 100%);
-  }
-
-  .cache-stat-card:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-  }
-
-  .cache-stat-icon {
-    font-size: 3em;
-    margin-bottom: 10px;
-  }
-
-  .cache-stat-value {
-    font-size: 2.5em;
-    font-weight: 900;
-    color: var(--primary);
-    margin: 10px 0;
-  }
-
-  .cache-stat-label {
-    color: var(--text-muted);
-    font-size: 0.9em;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-  }
-
-  .cache-explanation {
-    background: var(--bg-input);
-    padding: 20px;
-    border-radius: 12px;
-    text-align: center;
-    font-weight: 600;
-    font-size: 1.1em;
-    margin-top: 20px;
-  }
-
-  .features-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 20px;
-    margin-top: 20px;
-  }
-
-  .feature-card {
-    background: var(--bg-input);
-    padding: 30px;
-    border-radius: 12px;
-    text-align: center;
-    border: 2px solid var(--border);
-    transition: all 0.3s;
-  }
-
-  .feature-card.enabled {
-    border-color: var(--success);
-    background: linear-gradient(135deg, rgba(76, 175, 80, 0.15) 0%, rgba(76, 175, 80, 0.05) 100%);
-  }
-
-  .feature-card.disabled {
-    opacity: 0.5;
-  }
-
-  .feature-icon {
-    font-size: 3em;
-    margin-bottom: 15px;
-  }
-
-  .feature-name {
-    font-weight: 700;
-    font-size: 1.1em;
-    margin-bottom: 10px;
-    color: var(--text);
-  }
-
-  .feature-status {
-    color: var(--text-muted);
-    font-size: 0.9em;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-  }
-
-  .feature-card.enabled .feature-status {
-    color: var(--success);
-  }
-
-  .vm-stat-card.enhanced {
-    position: relative;
-    overflow: visible;
-  }
-
-  .vm-stat-card.enhanced::after {
-    content: '⚡';
-    position: absolute;
-    top: -10px;
-    right: -10px;
-    background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.2em;
-    box-shadow: 0 4px 15px rgba(0, 255, 204, 0.4);
-  }
-
-  .high-util {
-    color: var(--danger) !important;
-    animation: pulse 2s infinite;
-  }
-
-  .warning-metric {
-    background: rgba(255, 193, 7, 0.1);
-    border-radius: 8px;
-    padding: 8px;
-  }
-
-  .cache-metric {
-    background: rgba(0, 255, 204, 0.1);
-    border-radius: 8px;
-    padding: 8px;
-  }
-
-  .priority-badge {
-    display: inline-block;
-    padding: 4px 12px;
-    border-radius: 12px;
-    font-weight: 700;
-    font-size: 0.85em;
-  }
-
-  .priority-1, .priority-2 { background: #4caf50; color: white; }
-  .priority-3, .priority-4 { background: #ff9800; color: white; }
-  .priority-5 { background: #ffc107; color: black; }
-  .priority-6, .priority-7 { background: #ff5722; color: white; }
-  .priority-8, .priority-9, .priority-10 { background: #f44336; color: white; }
-
-  @keyframes rotate {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-`;
-
-// Add the enhanced styles to the document
-if (!document.getElementById("enhanced-styles")) {
-  const styleElement = document.createElement("style");
-  styleElement.id = "enhanced-styles";
-  styleElement.textContent = enhancedStyles;
-  document.head.appendChild(styleElement);
+  gsap.killTweensOf(state);
+  state.progress = 0;
+  gsap.to(state, { progress: 1, duration: 0.7, ease: "expo.out", onUpdate: drawChart });
 }
 
-// Initialize on page load
-document.addEventListener("DOMContentLoaded", function () {
-  updateVMTable();
-  updateProcessTable();
-  updateVMDropdown();
-  updateVMCount();
-  updateProcessCount();
+function timeAt(e) {
+  const g = state.geom;
+  return ((e.clientX - canvas.getBoundingClientRect().left - g.left) / g.plotW) * g.end;
+}
+
+function runAt(e) {
+  const g = state.geom;
+  const i = Math.floor((e.clientY - canvas.getBoundingClientRect().top - g.top) / G.track);
+  return i >= 0 && i < state.runs.length ? state.runs[i] : null;
+}
+
+const snapTime = (t) => Math.min(state.geom.end, Math.max(0, Math.round(t * 2) / 2));
+
+let dragging = false;
+
+canvas.addEventListener("pointerdown", (e) => {
+  if (!state.geom) return;
+  if (e.clientX - canvas.getBoundingClientRect().left < state.geom.left) {
+    const run = runAt(e);
+    if (run) selectRun(run.algo);
+    return;
+  }
+  dragging = true;
+  canvas.setPointerCapture(e.pointerId);
+  setClock(snapTime(timeAt(e)));
 });
+
+canvas.addEventListener("pointermove", (e) => {
+  if (!state.geom) return;
+  if (dragging) {
+    setClock(snapTime(timeAt(e)));
+    return;
+  }
+  const run = runAt(e);
+  const seg = run ? segmentAt(run, timeAt(e)) : null;
+  const hit = seg && !SPECIAL[seg.pid];
+  setHover(hit ? seg.pid : null, hit ? { run, seg } : null);
+});
+
+canvas.addEventListener("pointerup", () => (dragging = false));
+canvas.addEventListener("pointercancel", () => (dragging = false));
+canvas.addEventListener("pointerleave", () => {
+  if (!dragging) setHover(null);
+});
+
+canvas.addEventListener("keydown", (e) => {
+  if (!state.geom) return;
+  const by = e.shiftKey ? 10 : 1;
+  const now = state.clock ?? 0;
+  const next = {
+    ArrowRight: now + by,
+    ArrowLeft: now - by,
+    Home: 0,
+    End: state.geom.end,
+    Escape: null,
+  }[e.key];
+  if (next === undefined) return;
+  e.preventDefault();
+  setClock(next === null ? null : Math.min(state.geom.end, Math.max(0, next)));
+});
+
+function setClock(t) {
+  state.clock = t;
+  renderReadout();
+  drawChart();
+}
+
+function setHover(pid, info = null) {
+  if (state.hoverPid === pid && !info) return;
+  state.hoverPid = pid;
+  canvas.style.cursor = pid ? "pointer" : "crosshair";
+  renderReadout(info);
+  drawChart();
+}
+
+function renderReadout(info = null) {
+  const el = $("clockReadout");
+  if (!state.runs.length) {
+    el.textContent = "Add processes, pick algorithms, then run.";
+    return;
+  }
+  if (info) {
+    const r = info.run.data.results.find((p) => p.pid === info.seg.pid);
+    el.innerHTML =
+      `<b>${esc(info.seg.pid)}</b> on ${ALGO_LABELS[info.run.algo]}: runs ${fmtTime(info.seg.start)}–${fmtTime(info.seg.end)}` +
+      (r ? `, arrived ${fmtTime(r.arrival)}, done at ${fmtTime(r.completion)}, waited ${fmtTime(r.waiting)}` : "");
+    return;
+  }
+  if (state.clock === null) {
+    el.textContent = "Click or drag on the chart to read every track at one moment.";
+    return;
+  }
+  const t = state.clock;
+  const parts = state.runs.map((r) => {
+    const s = segmentAt(r, t);
+    const what =
+      !s || s.pid === "IDLE" ? "idle" : s.pid === "CS" ? "switching" : s.pid === "MIGRATION" ? "migrating" : `<b>${esc(s.pid)}</b>`;
+    return `${ALGO_LABELS[r.algo]} ${what}`;
+  });
+  el.innerHTML = `<span class="now">t = ${fmtTime(t)}</span> · ${parts.join(" · ")}`;
+}
+
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(drawChart, 120);
+});
+
+/* ---------------- Smooth scrolling ---------------- */
+
+if (window.Lenis && window.gsap && !reduceMotion.matches) {
+  const lenis = new Lenis({ lerp: 0.14 });
+  gsap.ticker.add((time) => lenis.raf(time * 1000));
+  gsap.ticker.lagSmoothing(0);
+}
+
+/* ---------------- Presets ---------------- */
+
+const PROCESS_PRESETS = {
+  sample: [
+    { pid: "P1", arrival: 0, burst: 5, priority: 2, ioTime: 1, memReq: 128 },
+    { pid: "P2", arrival: 1, burst: 3, priority: 1, ioTime: 0, memReq: 64 },
+    { pid: "P3", arrival: 2, burst: 8, priority: 3, ioTime: 2, memReq: 256 },
+    { pid: "P4", arrival: 3, burst: 6, priority: 2, ioTime: 1, memReq: 128 },
+  ],
+  io: [
+    { pid: "IO1", arrival: 0, burst: 4, priority: 3, ioTime: 3, memReq: 64 },
+    { pid: "IO2", arrival: 1, burst: 3, priority: 4, ioTime: 4, memReq: 128 },
+    { pid: "IO3", arrival: 2, burst: 5, priority: 3, ioTime: 3, memReq: 64 },
+    { pid: "IO4", arrival: 3, burst: 2, priority: 5, ioTime: 5, memReq: 128 },
+  ],
+  cpu: [
+    { pid: "CPU1", arrival: 0, burst: 10, priority: 1, ioTime: 0, memReq: 512 },
+    { pid: "CPU2", arrival: 1, burst: 15, priority: 2, ioTime: 1, memReq: 256 },
+    { pid: "CPU3", arrival: 2, burst: 12, priority: 1, ioTime: 0, memReq: 1024 },
+    { pid: "CPU4", arrival: 3, burst: 8, priority: 3, ioTime: 1, memReq: 256 },
+  ],
+};
+
+const VM_PRESETS = {
+  sample: [
+    { name: "VM1", priority: 2, cpuShare: 40, memory: 1024, type: "compute" },
+    { name: "VM2", priority: 5, cpuShare: 30, memory: 512, type: "standard" },
+    { name: "VM3", priority: 8, cpuShare: 30, memory: 2048, type: "memory" },
+  ],
+  balanced: [
+    { name: "Web-VM", priority: 3, cpuShare: 25, memory: 512, type: "standard" },
+    { name: "DB-VM", priority: 1, cpuShare: 35, memory: 2048, type: "memory" },
+    { name: "App-VM", priority: 2, cpuShare: 25, memory: 1024, type: "compute" },
+    { name: "Cache-VM", priority: 4, cpuShare: 15, memory: 512, type: "realtime" },
+  ],
+};
+
+/* ---------------- Init ---------------- */
+
+renderProcessTable();
+renderVMTable();
+renderVMOptions();
+renderResults();
+document.fonts?.ready.then(drawChart);
