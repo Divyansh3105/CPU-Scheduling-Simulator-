@@ -35,20 +35,20 @@ if ($method !== 'POST') {
     fail(405, 'Method not allowed');
 }
 
-function fail($status, $message)
+function fail(int $status, string $message): never
 {
     http_response_code($status);
     echo json_encode(['error' => $message]);
     exit;
 }
 
-function respond($data)
+function respond(mixed $data): never
 {
     echo json_encode($data);
     exit;
 }
 
-function read_input()
+function read_input(): array
 {
     $source = PHP_SAPI === 'cli' ? 'php://stdin' : 'php://input';
     $raw = file_get_contents($source, false, null, 0, MAX_BODY_BYTES + 1);
@@ -62,7 +62,7 @@ function read_input()
     return $input;
 }
 
-function int_field($value, $name, $min, $max, $default = null)
+function int_field(mixed $value, string $name, int $min, int $max, ?int $default = null): int
 {
     if ($value === null || $value === '') {
         if ($default === null) {
@@ -81,7 +81,7 @@ function int_field($value, $name, $min, $max, $default = null)
 }
 
 // Context switch overhead: 0-5 in steps of 0.5, so all simulated times stay exact in binary floats.
-function overhead_field($value)
+function overhead_field(mixed $value): int|float
 {
     if ($value === null) {
         return 0;
@@ -96,7 +96,7 @@ function overhead_field($value)
     return $value;
 }
 
-function name_field($value, $name, $default = null)
+function name_field(mixed $value, string $name, ?string $default = null): string
 {
     if (($value === null || $value === '') && $default !== null) {
         return $default;
@@ -111,12 +111,12 @@ function name_field($value, $name, $default = null)
     return $value;
 }
 
-function bool_field($value)
+function bool_field(mixed $value): bool
 {
     return $value === true || $value === 1 || $value === '1' || $value === 'true';
 }
 
-function enum_field($value, $name, $allowed, $default)
+function enum_field(mixed $value, string $name, array $allowed, string $default): string
 {
     if ($value === null || $value === '') {
         return $default;
@@ -128,8 +128,32 @@ function enum_field($value, $name, $allowed, $default)
     return $value;
 }
 
+// I/O points: CPU time units into the burst at which a process blocks for its ioTime.
+// Accepts an array or a comma-separated string; empty means "once, halfway through the burst".
+function io_points_field(mixed $value, string $pid, int $burst, int $ioTime): array
+{
+    if ($value === null || $value === '' || $value === []) {
+        $half = intdiv($burst + 1, 2);
+        return $ioTime > 0 && $half < $burst ? [$half] : [];
+    }
+    $items = is_string($value) ? preg_split('/\s*,\s*/', trim($value)) : $value;
+    if (!is_array($items) || count($items) > 10) {
+        fail(400, "$pid.ioAt must list at most 10 points");
+    }
+    $points = [];
+    foreach ($items as $item) {
+        $points[] = int_field($item, "$pid.ioAt", 1, $burst - 1 > 0 ? $burst - 1 : 1);
+    }
+    if ($burst < 2) {
+        fail(400, "$pid.ioAt needs a burst of at least 2");
+    }
+    $points = array_values(array_unique($points));
+    sort($points);
+    return $points;
+}
+
 // Returns processes validated, normalised and sorted by arrival (stable, so ties keep input order).
-function validate_processes($list)
+function validate_processes(mixed $list): array
 {
     if (!is_array($list) || !array_is_list($list) || count($list) === 0) {
         fail(400, 'processes must be a non-empty array');
@@ -147,12 +171,15 @@ function validate_processes($list)
         if (isset($out[$pid])) {
             fail(400, "Duplicate process ID: $pid");
         }
+        $burst = int_field($p['burst'] ?? null, "$pid.burst", 1, MAX_BURST);
+        $ioTime = int_field($p['ioTime'] ?? null, "$pid.ioTime", 0, MAX_BURST, 0);
         $out[$pid] = [
             'pid' => $pid,
             'arrival' => int_field($p['arrival'] ?? null, "$pid.arrival", 0, MAX_ARRIVAL),
-            'burst' => int_field($p['burst'] ?? null, "$pid.burst", 1, MAX_BURST),
+            'burst' => $burst,
             'priority' => int_field($p['priority'] ?? null, "$pid.priority", 1, 10, 5),
-            'ioTime' => int_field($p['ioTime'] ?? null, "$pid.ioTime", 0, MAX_BURST, 0),
+            'ioTime' => $ioTime,
+            'ioAt' => io_points_field($p['ioAt'] ?? null, $pid, $burst, $ioTime),
             'memReq' => int_field($p['memReq'] ?? null, "$pid.memReq", 1, 65536, 64),
             'vm' => name_field($p['vm'] ?? null, "$pid.vm", 'Host'),
         ];
@@ -168,17 +195,17 @@ function validate_processes($list)
 // dispatches a different process than the one that ran last. The first dispatch is free.
 class Timeline
 {
-    public $time = 0;
-    public $segments = [];
-    public $rem = [];
-    public $first = [];
-    public $finish = [];
-    public $switches = [];
-    private $last = null;
-    private $procs;
-    private $overhead;
+    public int|float $time = 0;
+    public array $segments = [];
+    public array $rem = [];
+    public array $first = [];
+    public array $finish = [];
+    public array $switches = [];
+    private ?string $last = null;
+    private array $procs;
+    private int|float $overhead;
 
-    public function __construct(array $procs, $overhead)
+    public function __construct(array $procs, int|float $overhead)
     {
         $this->procs = $procs;
         $this->overhead = $overhead;
@@ -188,7 +215,7 @@ class Timeline
         }
     }
 
-    public function idleUntil($t)
+    public function idleUntil(int|float $t): void
     {
         if ($t > $this->time) {
             $this->add('IDLE', $t, '');
@@ -196,7 +223,7 @@ class Timeline
     }
 
     // $extra: additional dispatch cost (cache miss, paging) shown together with the switch overhead.
-    public function switchTo($pid, $vm, $extra = 0)
+    public function switchTo(string $pid, string $vm, int|float $extra = 0): void
     {
         $cost = $extra;
         if ($this->last !== null && $this->last !== $pid) {
@@ -209,7 +236,7 @@ class Timeline
         $this->last = $pid;
     }
 
-    public function run($pid, $len, $vm)
+    public function run(string $pid, int|float $len, string $vm): void
     {
         $this->first[$pid] ??= $this->time;
         $this->add($pid, $this->time + $len, $vm);
@@ -219,14 +246,14 @@ class Timeline
         }
     }
 
-    public function penalty($label, $len, $vm)
+    public function penalty(string $label, int|float $len, string $vm): void
     {
         if ($len > 0) {
             $this->add($label, $this->time + $len, $vm);
         }
     }
 
-    private function add($pid, $end, $vm)
+    private function add(string $pid, int|float $end, string $vm): void
     {
         $n = count($this->segments);
         if ($n && $this->segments[$n - 1]['pid'] === $pid && $this->segments[$n - 1]['vm'] === $vm
@@ -238,7 +265,7 @@ class Timeline
         $this->time = $end;
     }
 
-    public function results()
+    public function results(): array
     {
         $results = [];
         foreach ($this->procs as $p) {
