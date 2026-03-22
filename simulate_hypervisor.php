@@ -1,13 +1,14 @@
 <?php
 require __DIR__ . '/common.php';
 
-const ALGORITHMS = ['FCFS', 'SJF', 'SRTF', 'PRIORITY', 'RR', 'MLFQ'];
+const ALGORITHMS = ['FCFS', 'SJF', 'SRTF', 'PRIORITY', 'PRIORITYP', 'RR', 'MLFQ'];
 const VM_SCHEDULERS = ['RR', 'PRIORITY', 'PROPORTIONAL', 'CREDIT', 'LOTTERY'];
 const VM_TYPES = ['standard', 'compute', 'memory', 'realtime'];
 const TOTAL_SYSTEM_MEMORY = 8192; // MB of physical memory shared by all VMs
 const CACHE_SIZE = 8;
 const CACHE_MISS_PENALTY = 2;
 const PAGING_PENALTY = 1;
+const NUMA_PENALTY = 2; // extra time units when the CPU moves to a VM on the other NUMA node
 const MIGRATION_IMBALANCE = 3; // migrate when a VM has this many more ready processes than another
 
 $input = read_input();
@@ -17,17 +18,19 @@ $vmScheduler = enum_field($input['vmScheduler'] ?? null, 'vmScheduler', VM_SCHED
 $vmQuantum = int_field($input['vmQuantum'] ?? null, 'vmQuantum', 1, MAX_QUANTUM, 10);
 $csOverhead = overhead_field($input['csOverhead'] ?? null);
 $migrationPenalty = int_field($input['migrationPenalty'] ?? null, 'migrationPenalty', 0, 100, 5);
+$mlfqBoost = int_field($input['mlfqBoost'] ?? null, 'mlfqBoost', 0, 10000, 0); // 0 = off
 $seed = int_field($input['seed'] ?? null, 'seed', 0, 2147483647, 42);
 $features = [
     'migration' => bool_field($input['enableMigration'] ?? false),
     'overcommit' => bool_field($input['enableOvercommit'] ?? false),
     'ioScheduling' => bool_field($input['enableIOScheduling'] ?? false),
     'caching' => bool_field($input['enableCaching'] ?? false),
+    'numa' => bool_field($input['enableNUMA'] ?? false),
 ];
 $processes = validate_processes($input['processes'] ?? null);
 $vms = validate_vms($input['vms'] ?? [], $processes);
 
-function validate_vms($list, $processes)
+function validate_vms(mixed $list, array $processes): array
 {
     if (!is_array($list) || !array_is_list($list)) {
         fail(400, 'vms must be an array');
@@ -72,18 +75,6 @@ function validate_vms($list, $processes)
     return $vms;
 }
 
-// Informational only: which vCPU class a process would be pinned to.
-function cpu_affinity($process, $vm)
-{
-    if ($vm['type'] === 'compute' || $vm['type'] === 'realtime') {
-        return ['affinity' => 'dedicated', 'vcpu' => 0];
-    }
-    if ($process['ioTime'] > 0) {
-        return ['affinity' => 'io-optimized', 'vcpu' => 1];
-    }
-    return ['affinity' => 'shared', 'vcpu' => -1];
-}
-
 // LRU cache of recently run (vm, pid) working sets.
 class CPUCache
 {
@@ -91,7 +82,7 @@ class CPUCache
     public $hits = 0;
     public $misses = 0;
 
-    public function access($pid, $vm)
+    public function access(string $pid, string $vm): bool
     {
         $key = "$vm:$pid";
         $hit = isset($this->cache[$key]);
@@ -111,8 +102,9 @@ class CPUCache
     }
 }
 
-function hypervisor_schedule($vms, $processes, $processAlgo, $processQuantum, $vmScheduler, $vmQuantum,
-                             $csOverhead, $migrationPenalty, $seed, $features)
+function hypervisor_schedule(array $vms, array $processes, string $processAlgo, int $processQuantum,
+                             string $vmScheduler, int $vmQuantum, int|float $csOverhead, int $migrationPenalty,
+                             int $mlfqBoost, int $seed, array $features): array
 {
     mt_srand($seed); // lottery draws are reproducible for the same input
     $tl = new Timeline($processes, $csOverhead);
@@ -136,7 +128,9 @@ function hypervisor_schedule($vms, $processes, $processAlgo, $processQuantum, $v
 
     $stats = [];
     $credits = [];
+    $node = [];
     foreach ($vmNames as $i => $name) {
+        $node[$name] = $i % 2; // two NUMA nodes, VMs alternate
         $stats[$name] = [
             'vm' => $name,
             'cpuTime' => 0,
@@ -149,7 +143,8 @@ function hypervisor_schedule($vms, $processes, $processAlgo, $processQuantum, $v
             'ioOperations' => 0,
             'cacheHits' => 0,
             'cacheMisses' => 0,
-            'numaNode' => $i % 2,
+            'numaNode' => $node[$name],
+            'numaHops' => 0,
             'overcommitEvents' => 0,
         ];
         $credits[$name] = $vms[$name]['cpuShare'];
@@ -158,9 +153,17 @@ function hypervisor_schedule($vms, $processes, $processAlgo, $processQuantum, $v
     $queues = array_fill_keys($vmNames, []); // ready pids per VM, in queue order
     $current = [];                           // VM => pid holding the VM's CPU (non-preemptive algorithms)
     $blocked = [];                           // pid => time its I/O completes
-    $ioDone = [];
+    $ioIdx = [];                             // pid => next I/O point to hit
+    $ioQueue = [];                           // requests waiting for the single I/O device
+    $ioSeq = 0;
     $deviceFree = 0;
     $ioSchedule = [];
+    $level = [];                             // pid => MLFQ level (0 = top)
+    foreach ($processes as $p) {
+        $level[$p['pid']] = 0;
+    }
+    $nextBoost = $mlfqBoost > 0 ? $mlfqBoost : INF;
+    $lastVM = null;
     $migrations = [];
     $ranOn = [];
     $rrPos = -1;
@@ -170,7 +173,40 @@ function hypervisor_schedule($vms, $processes, $processAlgo, $processQuantum, $v
     $nonPreemptive = in_array($processAlgo, ['FCFS', 'SJF', 'PRIORITY'], true);
     $sliced = in_array($processAlgo, ['RR', 'MLFQ'], true);
 
-    $admit = function () use (&$idx, &$queues, &$blocked, &$proc, $processes, $tl, $n) {
+    // The device serves one request at a time. When it frees up it takes the waiting request with the
+    // best (lowest) priority number, oldest first; only requests made by then are considered.
+    $serveDevice = function () use (&$ioQueue, &$deviceFree, &$blocked, &$ioSchedule, $tl) {
+        while ($ioQueue) {
+            $start = max($deviceFree, min(array_column($ioQueue, 'req')));
+            if ($start > $tl->time) {
+                return;
+            }
+            $best = null;
+            foreach ($ioQueue as $k => $r) {
+                if ($r['req'] <= $start && ($best === null
+                        || [$r['prio'], $r['seq']] < [$ioQueue[$best]['prio'], $ioQueue[$best]['seq']])) {
+                    $best = $k;
+                }
+            }
+            $r = $ioQueue[$best];
+            unset($ioQueue[$best]);
+            $deviceFree = $start + $r['dur'];
+            $blocked[$r['pid']] = $deviceFree;
+            $ioSchedule[] = ['pid' => $r['pid'], 'vm' => $r['vm'], 'ioTime' => $r['dur'], 'priority' => $r['prio'],
+                'requestTime' => $r['req'], 'startTime' => $start];
+        }
+    };
+    $boostCheck = function () use (&$level, &$nextBoost, $mlfqBoost, $processAlgo, $tl) {
+        while ($processAlgo === 'MLFQ' && $tl->time >= $nextBoost) {
+            foreach ($level as $q => $_) {
+                $level[$q] = 0;
+            }
+            $nextBoost += $mlfqBoost;
+        }
+    };
+
+    $admit = function () use (&$idx, &$queues, &$blocked, &$proc, $processes, $tl, $n, $serveDevice) {
+        $serveDevice();
         while ($idx < $n && $processes[$idx]['arrival'] <= $tl->time) {
             $pid = $processes[$idx++]['pid'];
             $queues[$proc[$pid]['vm']][] = $pid;
@@ -190,10 +226,14 @@ function hypervisor_schedule($vms, $processes, $processAlgo, $processQuantum, $v
 
     while ($left) {
         $admit();
+        $boostCheck();
         $ready = array_values(array_filter($vmNames, fn($v) => $queues[$v]));
 
         if (!$ready) {
             $next = $blocked ? min($blocked) : INF;
+            if ($ioQueue) {
+                $next = min($next, max($deviceFree, min(array_column($ioQueue, 'req'))));
+            }
             if ($idx < $n) {
                 $next = min($next, $processes[$idx]['arrival']);
             }
@@ -257,7 +297,7 @@ function hypervisor_schedule($vms, $processes, $processAlgo, $processQuantum, $v
                 $proc[$pid]['vm'] = $target;
                 $stats[$vm]['migrations']++;
                 $migrations[] = ['process' => $pid, 'fromVM' => $vm, 'toVM' => $target, 'time' => $tl->time, 'penalty' => $migrationPenalty];
-                $tl->penalty('MIGRATION', $migrationPenalty, "$vm→$target");
+                $tl->penalty('MIGRATION', $migrationPenalty, "{$vm}→{$target}");
                 continue;
             }
         }
@@ -265,6 +305,7 @@ function hypervisor_schedule($vms, $processes, $processAlgo, $processQuantum, $v
         // --- Process level: run the VM's processes for up to vmQuantum time units ---
         $budget = $vmQuantum;
         while ($budget > 0 && $queues[$vm]) {
+            $boostCheck();
             $queue = $queues[$vm];
             if ($nonPreemptive && isset($current[$vm]) && in_array($current[$vm], $queue, true)) {
                 $pid = $current[$vm];
@@ -273,8 +314,9 @@ function hypervisor_schedule($vms, $processes, $processAlgo, $processQuantum, $v
                 $keyOf = match ($processAlgo) {
                     'SJF' => fn($q) => $proc[$q]['burst'],
                     'SRTF' => fn($q) => $tl->rem[$q],
-                    'PRIORITY' => fn($q) => $proc[$q]['priority'],
-                    default => null, // FCFS, RR, MLFQ: queue head
+                    'PRIORITY', 'PRIORITYP' => fn($q) => $proc[$q]['priority'],
+                    'MLFQ' => fn($q) => $level[$q], // best level first, queue order within a level
+                    default => null, // FCFS, RR: queue head
                 };
                 if ($keyOf) {
                     foreach ($queue as $q) {
@@ -302,24 +344,30 @@ function hypervisor_schedule($vms, $processes, $processAlgo, $processQuantum, $v
                 $stats[$vm]['overcommitEvents']++;
                 $extra += PAGING_PENALTY;
             }
+            if ($features['numa'] && $lastVM !== null && $node[$lastVM] !== $node[$vm]) {
+                $tl->penalty('NUMA', NUMA_PENALTY, "N{$node[$lastVM]}→N{$node[$vm]}");
+                $stats[$vm]['numaHops']++;
+            }
             $tl->switchTo($pid, $vm, $extra);
+            $lastVM = $vm;
 
             $len = min($tl->rem[$pid], $budget);
+            $quantum = $processAlgo === 'MLFQ' ? $processQuantum << $level[$pid] : $processQuantum;
             if ($sliced) {
-                // ponytail: MLFQ inside a VM behaves like RR; per-process levels if it ever matters
-                $len = min($len, $processQuantum);
+                $len = min($len, $quantum);
             }
-            if ($processAlgo === 'SRTF') {
+            // SRTF, preemptive priority and lower MLFQ levels give way when a new job arrives in this VM.
+            if (in_array($processAlgo, ['SRTF', 'PRIORITYP'], true) || ($processAlgo === 'MLFQ' && $level[$pid] > 0)) {
                 foreach ($processes as $other) {
                     if ($other['arrival'] > $tl->time && $proc[$other['pid']]['vm'] === $vm) {
                         $len = min($len, $other['arrival'] - $tl->time);
                     }
                 }
             }
-            $cpuBeforeIO = intdiv($p['burst'] + 1, 2); // one I/O burst halfway through the CPU burst
-            $wantsIO = $features['ioScheduling'] && $p['ioTime'] > 0 && empty($ioDone[$pid]);
-            if ($wantsIO) {
-                $len = min($len, $cpuBeforeIO - ($p['burst'] - $tl->rem[$pid]));
+            // User-defined I/O points: block after this many CPU units of the burst.
+            $point = $features['ioScheduling'] && $p['ioTime'] > 0 ? ($p['ioAt'][$ioIdx[$pid] ?? 0] ?? null) : null;
+            if ($point !== null) {
+                $len = min($len, $point - ($p['burst'] - $tl->rem[$pid]));
             }
 
             $tl->run($pid, $len, $vm);
@@ -332,17 +380,17 @@ function hypervisor_schedule($vms, $processes, $processAlgo, $processQuantum, $v
                 $dequeue($vm, $pid);
                 unset($current[$vm]);
                 $left--;
-            } elseif ($wantsIO && $p['burst'] - $tl->rem[$pid] >= $cpuBeforeIO) {
-                // ponytail: single FCFS I/O device; a priority queue if contention modelling matters
-                $start = max($deviceFree, $tl->time);
-                $deviceFree = $start + $p['ioTime'];
-                $blocked[$pid] = $deviceFree;
-                $ioDone[$pid] = true;
-                $ioSchedule[] = ['pid' => $pid, 'vm' => $vm, 'ioTime' => $p['ioTime'], 'priority' => $p['priority'], 'startTime' => $start];
+            } elseif ($point !== null && $p['burst'] - $tl->rem[$pid] >= $point) {
+                $ioIdx[$pid] = ($ioIdx[$pid] ?? 0) + 1;
+                $ioQueue[] = ['pid' => $pid, 'vm' => $vm, 'req' => $tl->time, 'dur' => $p['ioTime'],
+                    'prio' => $p['priority'], 'seq' => $ioSeq++];
                 $stats[$vm]['ioOperations']++;
                 $dequeue($vm, $pid);
                 unset($current[$vm]);
             } elseif ($sliced) {
+                if ($processAlgo === 'MLFQ' && $len >= $quantum) {
+                    $level[$pid] = min($level[$pid] + 1, 2); // used its whole quantum: demote
+                }
                 $dequeue($vm, $pid);
                 $queues[$vm][] = $pid;
             }
@@ -361,7 +409,6 @@ function hypervisor_schedule($vms, $processes, $processAlgo, $processQuantum, $v
     $out = $tl->results();
     foreach ($out['results'] as &$r) {
         $r['vm'] = $proc[$r['pid']]['vm'];
-        $r['affinity'] = cpu_affinity($proc[$r['pid']], $vms[$r['vm']]);
     }
     unset($r);
 
@@ -376,4 +423,4 @@ function hypervisor_schedule($vms, $processes, $processAlgo, $processQuantum, $v
 }
 
 respond(hypervisor_schedule($vms, $processes, $processAlgo, $processQuantum, $vmScheduler, $vmQuantum,
-    $csOverhead, $migrationPenalty, $seed, $features));
+    $csOverhead, $migrationPenalty, $mlfqBoost, $seed, $features));
