@@ -80,6 +80,10 @@
                         <input type="number" id="ioTime" placeholder="0" min="0" max="1000" value="0" inputmode="numeric">
                     </div>
                     <div class="field">
+                        <label for="ioAt">I/O at <span class="hint">CPU units</span></label>
+                        <input type="text" id="ioAt" placeholder="auto (halfway)" pattern="[0-9 ,]*" maxlength="40" title="Comma-separated CPU times into the burst, e.g. 2,5. Leave empty for halfway." autocomplete="off">
+                    </div>
+                    <div class="field">
                         <label for="memReq">Memory MB</label>
                         <input type="number" id="memReq" placeholder="64" min="1" max="65536" value="64" inputmode="numeric">
                     </div>
@@ -209,6 +213,7 @@
                         <label class="chip"><input type="checkbox" value="SJF" checked><span>SJF</span></label>
                         <label class="chip"><input type="checkbox" value="SRTF"><span>SRTF</span></label>
                         <label class="chip"><input type="checkbox" value="PRIORITY"><span>Priority</span></label>
+                        <label class="chip"><input type="checkbox" value="PRIORITYP"><span>Priority (P)</span></label>
                         <label class="chip"><input type="checkbox" value="RR" checked><span>Round Robin</span></label>
                         <label class="chip"><input type="checkbox" value="MLFQ"><span>MLFQ</span></label>
                     </div>
@@ -218,6 +223,14 @@
                     <div class="field inline">
                         <label for="quantum">Quantum</label>
                         <input type="number" id="quantum" value="2" min="1" max="1000" inputmode="numeric">
+                    </div>
+                    <div class="field inline">
+                        <label for="priorityAging">Priority aging <span class="hint">0 = off</span></label>
+                        <input type="number" id="priorityAging" value="0" min="0" max="1000" inputmode="numeric" title="Every N time units spent waiting improves a priority number by one">
+                    </div>
+                    <div class="field inline">
+                        <label for="mlfqBoost">MLFQ boost <span class="hint">0 = off</span></label>
+                        <input type="number" id="mlfqBoost" value="0" min="0" max="10000" inputmode="numeric" title="Every N time units all MLFQ jobs return to the top queue">
                     </div>
                     <div class="field slider">
                         <label for="contextSwitchOverhead">Context switch <output id="csOverheadValue" for="contextSwitchOverhead">1</output></label>
@@ -249,6 +262,7 @@
                         <label class="check"><input type="checkbox" id="enableOvercommit"><span>Memory overcommit</span></label>
                         <label class="check"><input type="checkbox" id="enableIOScheduling"><span>I/O blocking</span></label>
                         <label class="check"><input type="checkbox" id="enableCaching"><span>CPU cache</span></label>
+                        <label class="check"><input type="checkbox" id="enableNUMA"><span>NUMA penalty</span></label>
                     </div>
                 </div>
             </section>

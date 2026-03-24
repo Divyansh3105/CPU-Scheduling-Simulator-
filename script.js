@@ -14,6 +14,7 @@ const ALGO_LABELS = {
   SJF: "SJF",
   SRTF: "SRTF",
   PRIORITY: "Priority",
+  PRIORITYP: "Priority (P)",
   RR: "Round Robin",
   MLFQ: "MLFQ",
 };
@@ -25,7 +26,7 @@ const ROUTE_COLORS = [
 ];
 
 // Non-process segments returned by the backend.
-const SPECIAL = { IDLE: true, CS: true, MIGRATION: true };
+const SPECIAL = { IDLE: true, CS: true, MIGRATION: true, NUMA: true };
 
 const state = {
   processes: [],
@@ -120,6 +121,14 @@ $("processForm").addEventListener("submit", (e) => {
   const ioTime = parseInt($("ioTime").value, 10) || 0;
   const memReq = parseInt($("memReq").value, 10) || 64;
   const vm = $("vmAssignment").value || "Host";
+  const ioAt = [
+    ...new Set(
+      $("ioAt")
+        .value.split(",")
+        .map((t) => parseInt(t, 10))
+        .filter((n) => Number.isInteger(n))
+    ),
+  ].sort((a, b) => a - b);
 
   if (!NAME_RE.test(pid)) {
     showNotification("Process ID must be 1-32 letters, digits, spaces, _ . -", "error");
@@ -133,12 +142,16 @@ $("processForm").addEventListener("submit", (e) => {
     showNotification(`Process ${pid} already exists.`, "error");
     return;
   }
+  if (ioAt.some((n) => n < 1 || n >= burst)) {
+    showNotification("I/O points must be between 1 and burst - 1 CPU units.", "error");
+    return;
+  }
   if (state.processes.length >= MAX_PROCESSES) {
     showNotification(`At most ${MAX_PROCESSES} processes are allowed.`, "error");
     return;
   }
 
-  state.processes.push({ pid, arrival, burst, priority, ioTime, memReq, vm });
+  state.processes.push({ pid, arrival, burst, priority, ioTime, ioAt, memReq, vm });
   workloadChanged();
   e.target.reset();
   $("pid").focus();
@@ -179,7 +192,7 @@ function renderProcessTable() {
         <td class="num">${esc(p.arrival)}</td>
         <td class="num">${esc(p.burst)}</td>
         <td class="num">${esc(p.priority)}</td>
-        <td class="num">${esc(p.ioTime)}</td>
+        <td class="num">${esc(p.ioTime)}${p.ioTime && p.ioAt?.length ? `<span class="hint"> @${esc(p.ioAt.join(","))}</span>` : ""}</td>
         <td class="num">${esc(p.memReq)}</td>
         <td>${p.vm === "Host" ? "Host" : `<span class="tag">${esc(p.vm)}</span>`}</td>
         <td><button type="button" class="icon-btn" data-pid="${esc(p.pid)}" aria-label="Remove ${esc(p.pid)}">${icon("i-x")}</button></td>
@@ -348,7 +361,7 @@ $("migrationPenalty").addEventListener("input", (e) => {
 
 document
   .querySelectorAll(
-    "#algoChips input, #quantum, #contextSwitchOverhead, #vmScheduler, #vmQuantum, #migrationPenalty, .features input"
+    "#algoChips input, #quantum, #priorityAging, #mlfqBoost, #contextSwitchOverhead, #vmScheduler, #vmQuantum, #migrationPenalty, .features input"
   )
   .forEach((el) => el.addEventListener("change", settingsChanged));
 
@@ -379,15 +392,18 @@ function selectedAlgorithms() {
 }
 
 function buildPayload(algo, hv) {
-  const processes = state.processes.map(({ pid, arrival, burst, priority, ioTime, memReq, vm }) => ({
-    pid, arrival, burst, priority, ioTime, memReq, vm,
+  const processes = state.processes.map(({ pid, arrival, burst, priority, ioTime, ioAt, memReq, vm }) => ({
+    pid, arrival, burst, priority, ioTime, ioAt, memReq, vm,
   }));
   const quantum = parseInt($("quantum").value, 10) || 2;
   const csOverhead = parseFloat($("contextSwitchOverhead").value) || 0;
-  if (!hv) return { algorithm: algo, quantum, processes, csOverhead };
+  const aging = parseInt($("priorityAging").value, 10) || 0;
+  const mlfqBoost = parseInt($("mlfqBoost").value, 10) || 0;
+  if (!hv) return { algorithm: algo, quantum, aging, mlfqBoost, processes, csOverhead };
   return {
     processAlgo: algo,
     processQuantum: quantum,
+    mlfqBoost,
     processes,
     vms: state.vms,
     vmScheduler: $("vmScheduler").value,
@@ -396,6 +412,7 @@ function buildPayload(algo, hv) {
     enableOvercommit: $("enableOvercommit").checked,
     enableIOScheduling: $("enableIOScheduling").checked,
     enableCaching: $("enableCaching").checked,
+    enableNUMA: $("enableNUMA").checked,
     csOverhead,
     migrationPenalty: parseInt($("migrationPenalty").value, 10) || 0,
   };
@@ -574,6 +591,7 @@ function renderLegend() {
   if (has("CS")) html += `<span class="legend-item"><i class="swatch cs"></i>Context switch / overhead</span>`;
   if (has("IDLE")) html += `<span class="legend-item"><i class="swatch idle"></i>Idle</span>`;
   if (has("MIGRATION")) html += `<span class="legend-item"><i class="swatch mig"></i>Migration</span>`;
+  if (has("NUMA")) html += `<span class="legend-item"><i class="swatch numa"></i>NUMA hop</span>`;
   $("legend").innerHTML = html;
 }
 
@@ -637,6 +655,7 @@ function renderHvDetail(run) {
     ["Memory overcommit", f.overcommit],
     ["I/O blocking", f.ioScheduling],
     ["CPU cache", f.caching],
+    ["NUMA penalty", f.numa],
   ]
     .map(([label, on]) => `<li class="${on ? "on" : ""}">${label} ${on ? "on" : "off"}</li>`)
     .join("");
@@ -648,7 +667,7 @@ function renderHvDetail(run) {
       <thead><tr>
         <th scope="col">VM</th><th scope="col" class="num">CPU time</th><th scope="col">Utilisation</th>
         <th scope="col" class="num">Idle</th><th scope="col" class="num">Processes</th><th scope="col" class="num">Migrations</th>
-        <th scope="col" class="num">NUMA</th><th scope="col" class="num">Overcommit</th><th scope="col" class="num">Cache hits</th>
+        <th scope="col" class="num">NUMA node</th><th scope="col" class="num">NUMA hops</th><th scope="col" class="num">Overcommit</th><th scope="col" class="num">Cache hits</th>
       </tr></thead>
       <tbody>${d.vmStats
         .map((s) => {
@@ -662,6 +681,7 @@ function renderHvDetail(run) {
             <td class="num">${esc(s.processCount)}</td>
             <td class="num">${esc(s.migrations || 0)}</td>
             <td class="num">${esc(s.numaNode)}</td>
+            <td class="num">${esc(s.numaHops || 0)}</td>
             <td class="num">${esc(s.overcommitEvents || 0)}</td>
             <td class="num">${lookups ? fmt((s.cacheHits / lookups) * 100, 1) + "%" : "–"}</td>
           </tr>`;
@@ -689,13 +709,14 @@ function renderHvDetail(run) {
 
   if (d.ioSchedule && d.ioSchedule.length) {
     html += `<div class="hv-block"><h3>I/O operations</h3>
-      <p class="readout">Each process with I/O time blocks halfway through its burst; the device serves requests in order.</p>
+      <p class="readout">A process blocks at each of its I/O points (halfway through the burst unless set). One device serves requests; when it frees up it takes the waiting request with the best priority number.</p>
       <div class="table-scroll"><table class="data">
-      <thead><tr><th scope="col">Process</th><th scope="col">VM</th><th scope="col" class="num">Start</th><th scope="col" class="num">Duration</th><th scope="col" class="num">Priority</th></tr></thead>
+      <thead><tr><th scope="col">Process</th><th scope="col">VM</th><th scope="col" class="num">Requested</th><th scope="col" class="num">Started</th><th scope="col" class="num">Waited</th><th scope="col" class="num">Duration</th><th scope="col" class="num">Priority</th></tr></thead>
       <tbody>${d.ioSchedule
         .map(
           (io) => `<tr><td>${esc(io.pid)}</td><td><span class="tag">${esc(io.vm)}</span></td>
-          <td class="num">${fmtTime(io.startTime)}</td><td class="num">${esc(io.ioTime)}</td><td class="num">${esc(io.priority)}</td></tr>`
+          <td class="num">${fmtTime(io.requestTime)}</td><td class="num">${fmtTime(io.startTime)}</td><td class="num">${fmtTime(io.startTime - io.requestTime)}</td>
+          <td class="num">${esc(io.ioTime)}</td><td class="num">${esc(io.priority)}</td></tr>`
         )
         .join("")}</tbody></table></div></div>`;
   }
@@ -846,8 +867,8 @@ function drawChart() {
       if (s.pid === "IDLE") return;
       const sx = x(s.start);
       const sw = Math.max(1, x(s.end) - sx);
-      if (s.pid === "CS" || s.pid === "MIGRATION") {
-        hatch(sx, top + 4, sw, G.bar - 8, s.pid === "CS" ? "#8a929e" : signal);
+      if (SPECIAL[s.pid]) {
+        hatch(sx, top + 4, sw, G.bar - 8, { CS: "#8a929e", MIGRATION: signal, NUMA: "#8a5400" }[s.pid]);
         return;
       }
       ctx.globalAlpha = state.hoverPid && state.hoverPid !== s.pid ? 0.18 : 1;

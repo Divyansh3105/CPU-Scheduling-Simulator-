@@ -909,6 +909,9 @@ section.detail {
   border-radius: 0;
   background: var(--ink);
 }
+.legend-item .swatch.numa {
+  background: repeating-linear-gradient(135deg, #8a5400 0 2px, #f3e3c3 2px 4px);
+}
 .legend-item .swatch.mig {
   background: repeating-linear-gradient(135deg, var(--signal) 0 2px, #f6d3d9 2px 4px);
 }
