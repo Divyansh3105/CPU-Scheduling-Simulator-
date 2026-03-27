@@ -1,5 +1,5 @@
 <?php
-require __DIR__ . '/common.php';
+require __DIR__ . '/../../src/bootstrap.php';
 
 $input = read_input();
 $algorithm = enum_field($input['algorithm'] ?? null, 'algorithm', ['FCFS', 'SJF', 'SRTF', 'PRIORITY', 'PRIORITYP', 'RR', 'MLFQ'], 'FCFS');

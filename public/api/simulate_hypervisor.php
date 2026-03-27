@@ -1,5 +1,5 @@
 <?php
-require __DIR__ . '/common.php';
+require __DIR__ . '/../../src/bootstrap.php';
 
 const ALGORITHMS = ['FCFS', 'SJF', 'SRTF', 'PRIORITY', 'PRIORITYP', 'RR', 'MLFQ'];
 const VM_SCHEDULERS = ['RR', 'PRIORITY', 'PROPORTIONAL', 'CREDIT', 'LOTTERY'];

@@ -4,14 +4,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
     <meta name="referrer" content="no-referrer">
     <meta name="description" content="Compare CPU scheduling algorithms on one workload: FCFS, SJF, SRTF, Priority, Round Robin and MLFQ, with an optional hypervisor layer.">
     <title>CPU Scheduling Simulator</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Semi+Condensed:wght@500;600;700&display=swap">
-    <link rel="stylesheet" href="styles.css">
+    <link rel="preload" href="assets/fonts/Barlow-400.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="assets/fonts/BarlowSemiCondensed-600.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="assets/css/styles.css">
 </head>
 
 <body>
@@ -343,9 +342,9 @@
 
     <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-    <script src="https://cdn.jsdelivr.net/npm/lenis@1.1.13/dist/lenis.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-    <script src="script.js"></script>
+    <script src="assets/vendor/gsap.min.js"></script>
+    <script src="assets/vendor/lenis.min.js"></script>
+    <script src="assets/js/script.js"></script>
 </body>
 
 </html>

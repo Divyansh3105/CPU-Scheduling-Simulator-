@@ -1,12 +1,12 @@
 "use strict";
 
-// Must match NAME_PATTERN / MAX_PROCESSES in common.php
+// Must match NAME_PATTERN / MAX_PROCESSES in src/bootstrap.php
 const NAME_RE = /^[A-Za-z0-9_.\- ]{1,32}$/;
 const MAX_PROCESSES = 100;
 
 const PHP_BACKEND = {
-  simulate: "simulate.php",
-  hypervisor: "simulate_hypervisor.php",
+  simulate: "api/simulate.php",
+  hypervisor: "api/simulate_hypervisor.php",
 };
 
 const ALGO_LABELS = {
@@ -60,6 +60,13 @@ function esc(value) {
 
 const fmt = (n, d = 2) => (Number.isFinite(n) ? n.toFixed(d) : "–");
 const fmtTime = (n) => (Number.isInteger(n) ? String(n) : Number(n).toFixed(1));
+// Inline style="" attributes would force 'unsafe-inline' in the CSP, so colours and widths travel
+// as data attributes and are applied through the style API after rendering.
+function paint(root) {
+  root.querySelectorAll("[data-c]").forEach((el) => (el.style.background = el.dataset.c));
+  root.querySelectorAll("[data-w]").forEach((el) => (el.style.width = `${el.dataset.w}%`));
+}
+
 const icon = (id) => `<svg class="icon" aria-hidden="true"><use href="#${id}"/></svg>`;
 
 function colorFor(pid) {
@@ -188,7 +195,7 @@ function renderProcessTable() {
   tbody.innerHTML = state.processes
     .map(
       (p) => `<tr>
-        <td><span class="pid"><i class="swatch" style="background:${colorFor(p.pid)}"></i>${esc(p.pid)}</span></td>
+        <td><span class="pid"><i class="swatch" data-c="${colorFor(p.pid)}"></i>${esc(p.pid)}</span></td>
         <td class="num">${esc(p.arrival)}</td>
         <td class="num">${esc(p.burst)}</td>
         <td class="num">${esc(p.priority)}</td>
@@ -199,6 +206,7 @@ function renderProcessTable() {
       </tr>`
     )
     .join("");
+  paint(tbody);
   tbody.querySelectorAll(".icon-btn").forEach((btn) =>
     btn.addEventListener("click", () => removeProcess(btn.dataset.pid))
   );
@@ -427,7 +435,7 @@ async function post(url, payload) {
       body: JSON.stringify(payload),
     });
   } catch {
-    throw new Error(`Can't reach ${url}. Serve this folder with PHP (php -S localhost:8000).`);
+    throw new Error(`Can't reach ${url}. Serve this folder with PHP (php -S localhost:8000 -t public).`);
   }
   const data = await response.json().catch(() => ({}));
   if (data.error) throw new Error(data.error);
@@ -585,7 +593,7 @@ function renderLegend() {
   const segs = state.runs.flatMap((r) => r.data.segments);
   const has = (pid) => segs.some((s) => s.pid === pid);
   let html = pids
-    .map((pid) => `<span class="legend-item"><i class="swatch" style="background:${colorFor(pid)}"></i>${esc(pid)}</span>`)
+    .map((pid) => `<span class="legend-item"><i class="swatch" data-c="${colorFor(pid)}"></i>${esc(pid)}</span>`)
     .join("");
   html += `<span class="legend-item"><i class="swatch dep"></i>Departure (process done)</span>`;
   if (has("CS")) html += `<span class="legend-item"><i class="swatch cs"></i>Context switch / overhead</span>`;
@@ -593,6 +601,7 @@ function renderLegend() {
   if (has("MIGRATION")) html += `<span class="legend-item"><i class="swatch mig"></i>Migration</span>`;
   if (has("NUMA")) html += `<span class="legend-item"><i class="swatch numa"></i>NUMA hop</span>`;
   $("legend").innerHTML = html;
+  paint($("legend"));
 }
 
 function renderDetail() {
@@ -622,7 +631,7 @@ function renderDetail() {
   tbody.innerHTML = run.data.results
     .map(
       (p) => `<tr data-pid="${esc(p.pid)}">
-        <td><span class="pid"><i class="swatch" style="background:${colorFor(p.pid)}"></i>${esc(p.pid)}</span></td>
+        <td><span class="pid"><i class="swatch" data-c="${colorFor(p.pid)}"></i>${esc(p.pid)}</span></td>
         <td>${p.vm === "Host" ? "Host" : `<span class="tag">${esc(p.vm)}</span>`}</td>
         <td class="num">${fmtTime(p.arrival)}</td>
         <td class="num">${fmtTime(p.burst)}</td>
@@ -634,6 +643,7 @@ function renderDetail() {
       </tr>`
     )
     .join("");
+  paint(tbody);
   tbody.querySelectorAll("tr").forEach((tr) => {
     tr.addEventListener("mouseenter", () => setHover(tr.dataset.pid));
     tr.addEventListener("mouseleave", () => setHover(null));
@@ -676,7 +686,7 @@ function renderHvDetail(run) {
           return `<tr>
             <td><span class="tag">${esc(s.vm)}</span></td>
             <td class="num">${fmtTime(s.cpuTime)}</td>
-            <td><span class="util"><span class="util-bar"><i style="width:${util}%"></i></span>${fmt(s.utilization, 1)}%</span></td>
+            <td><span class="util"><span class="util-bar"><i data-w="${util}"></i></span>${fmt(s.utilization, 1)}%</span></td>
             <td class="num">${fmtTime(s.idleTime)}</td>
             <td class="num">${esc(s.processCount)}</td>
             <td class="num">${esc(s.migrations || 0)}</td>
@@ -722,6 +732,7 @@ function renderHvDetail(run) {
   }
 
   box.innerHTML = html;
+  paint(box);
 }
 
 /* ---------------- Timetable chart ---------------- */
