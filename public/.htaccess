@@ -1,0 +1,30 @@
+# Apache config for the web root (needs mod_headers; AllowOverride must permit it).
+# Security headers that a <meta> tag cannot carry (frame-ancestors, HSTS) are sent here.
+# Point DocumentRoot at this public/ folder: src/, tests/ and deploy/ then are not reachable at all.
+
+Options -Indexes
+
+<IfModule mod_headers.c>
+    Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY"
+    Header always set Referrer-Policy "no-referrer"
+    Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    Header always set Cross-Origin-Opener-Policy "same-origin"
+    # Only meaningful over HTTPS. Remove includeSubDomains if other subdomains still serve plain HTTP.
+    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains" "expr=%{HTTPS} == 'on'"
+    # Fonts never change without a rename.
+    <FilesMatch "\.woff2$">
+        Header set Cache-Control "public, max-age=31536000, immutable"
+    </FilesMatch>
+</IfModule>
+
+# Dotfiles (including this one) are not meant to be requested.
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
+
+# Optional tuning: the API limit and a proxy-aware client address (see the README).
+# SetEnv RATE_LIMIT_PER_MIN 300
+# SetEnv RATE_LIMIT_IP_HEADER HTTP_X_FORWARDED_FOR
+# SetEnv ALLOWED_ORIGIN https://example.com
