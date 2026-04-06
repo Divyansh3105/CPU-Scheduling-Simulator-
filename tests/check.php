@@ -2,13 +2,19 @@
 // Self-check for both endpoints. Run: php tests/check.php
 // Expected values are hand-computed textbook schedules.
 
+if (PHP_SAPI !== 'cli') { // never runnable through a web server
+    http_response_code(404);
+    exit;
+}
+
 $root = dirname(__DIR__);
+require $root . '/src/bootstrap.php'; // for rate_limit_allow(); in the CLI it sends no headers and reads no input
 $failures = 0;
 
 function call(string $endpoint, array|string $payload): array
 {
     global $root;
-    $proc = proc_open([PHP_BINARY, "$root/$endpoint"], [['pipe', 'r'], ['pipe', 'w'], ['pipe', 'w']], $pipes);
+    $proc = proc_open([PHP_BINARY, "$root/public/api/$endpoint"], [['pipe', 'r'], ['pipe', 'w'], ['pipe', 'w']], $pipes);
     fwrite($pipes[0], is_string($payload) ? $payload : json_encode($payload));
     fclose($pipes[0]);
     $out = stream_get_contents($pipes[1]);
@@ -210,6 +216,22 @@ check('HV NUMA penalty on cross-node switches', by_pid($d, 'completion') == ['A'
     && array_column($d['vmStats'], 'numaHops', 'vm') == ['VM1' => 1, 'VM2' => 2]
     && count(array_filter($d['segments'], fn($s) => $s['pid'] === 'NUMA')) === 3);
 check('HV results no longer carry affinity', !array_key_exists('affinity', $d['results'][0]));
+
+// --- Rate limiter ---
+$rlDir = sys_get_temp_dir() . '/cpusim-test-' . bin2hex(random_bytes(4));
+mkdir($rlDir);
+$t0 = 1000;
+$hits = [];
+for ($i = 0; $i < 4; $i++) {
+    $hits[] = rate_limit_allow($rlDir, '1.2.3.4', 3, 60, $t0 + $i);
+}
+check('rate limit allows up to the limit then blocks', $hits[0] === 0 && $hits[2] === 0 && $hits[3] === 57);
+check('rate limit retry-after counts down', rate_limit_allow($rlDir, '1.2.3.4', 3, 60, $t0 + 30) === 30);
+check('rate limit is per client', rate_limit_allow($rlDir, '5.6.7.8', 3, 60, $t0) === 0);
+check('rate limit resets after the window', rate_limit_allow($rlDir, '1.2.3.4', 3, 60, $t0 + 60) === 0);
+check('rate limit fails open if the directory is unusable', rate_limit_allow($rlDir . '/missing', 'x', 1, 60, $t0) === 0);
+array_map('unlink', glob($rlDir . '/*') ?: []);
+rmdir($rlDir);
 
 echo $failures ? "\n$failures check(s) failed\n" : "\nAll checks passed\n";
 exit($failures ? 1 : 0);
