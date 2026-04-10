@@ -24,12 +24,12 @@ Built with plain HTML, CSS and vanilla JavaScript, plus two PHP endpoints. There
 Requires PHP 8.1 or newer.
 
 ```bash
-php -S localhost:8000
+php -S localhost:8000 -t public
 ```
 
-Then open <http://localhost:8000>. The page must be served by PHP, because it posts to `simulate.php` and `simulate_hypervisor.php`; opening `index.html` as a file won't work.
+Then open <http://localhost:8000>. The web root is the `public/` folder, and the page must be served by PHP because it posts to `api/simulate.php` and `api/simulate_hypervisor.php`; opening `index.html` as a file won't work.
 
-GSAP and Lenis (animation and smooth scrolling) and the Barlow font load from public CDNs. The simulator still works if they're blocked, just without the animation.
+GSAP and Lenis (animation and smooth scrolling) and the Barlow fonts are bundled in `public/assets/vendor/` and `public/assets/fonts/`, so the page makes no requests to third parties. See [public/assets/vendor/README.md](public/assets/vendor/README.md) for versions, licences and checksums.
 
 ## How scheduling is modelled
 
@@ -61,8 +61,24 @@ The server validates every request and returns a 4xx with a message if a limit i
 
 ## Configuration
 
-- `ALLOWED_ORIGIN`: set this environment variable to a single origin (for example `https://example.com`) to allow cross-origin POSTs. By default the API is same-origin only.
-- For production, also set `display_errors=0` (the endpoints already do this at runtime) and keep the folder out of a web-writable location.
+Environment variables, read by the PHP endpoints:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ALLOWED_ORIGIN` | unset | A single origin allowed to make cross-origin POSTs. By default the API is same-origin only. |
+| `RATE_LIMIT_PER_MIN` | `300` | Requests per client per minute across both endpoints. `0` turns the limit off. |
+| `RATE_LIMIT_IP_HEADER` | unset | Name of a `$_SERVER` key (for example `HTTP_X_FORWARDED_FOR`) to read the client address from. Set it only behind a reverse proxy you control, because clients can forge it otherwise. |
+
+## Security and hosting
+
+- **Rate limiting:** over the limit, the API answers `429` with a `Retry-After` header. Counters are small files in the system temp directory; if that directory isn't writable the limiter lets requests through rather than failing. A run of up to six algorithms is six requests, so the default allows dozens of runs a minute. Behind a proxy without `RATE_LIMIT_IP_HEADER`, every visitor shares one counter.
+- **Headers:** a `<meta>` tag can't carry `frame-ancestors` or HSTS, so deploy with one of the ready-made configs:
+  - Apache: the included [public/.htaccess](public/.htaccess) (needs `mod_headers`).
+  - nginx: [deploy/nginx.conf](deploy/nginx.conf), an example server block for PHP-FPM.
+  Both send a strict CSP (`default-src 'self'`, no inline script or style), `frame-ancestors 'none'`, `nosniff`, a no-referrer policy and HSTS over HTTPS, and both hide dotfiles. In nginx only the two `api/` endpoints reach PHP.
+- **Web root:** point the server's document root at `public/`. The PHP library code in `src/`, the tests and the deploy files then can't be requested at all, whatever the server configuration.
+- **No third-party requests:** scripts and fonts are served from this repository, so visits don't reveal the visitor's address to Google or a CDN, and there are no script hashes to keep in sync.
+- Also set `display_errors=0` in production (the endpoints already do this at runtime) and keep the folder out of a web-writable location.
 
 ## Tests
 
@@ -70,18 +86,31 @@ The server validates every request and returns a 4xx with a message if a limit i
 php tests/check.php
 ```
 
-Runs both endpoints from the command line against hand-computed schedules and checks that bad input is rejected. It prints one line per check and exits non-zero if any fail.
+Runs both endpoints from the command line against hand-computed schedules, checks that bad input is rejected, and unit-tests the rate limiter. It only runs from the command line. It prints one line per check and exits non-zero if any fail.
 
 ## Project layout
 
-| Path | Purpose |
-| --- | --- |
-| `index.html`, `styles.css`, `script.js` | The single-page UI |
-| `simulate.php` | Standard scheduling endpoint |
-| `simulate_hypervisor.php` | Hypervisor scheduling endpoint |
-| `common.php` | Shared validation, headers, and the timeline/metrics engine |
-| `tests/check.php` | Backend self-check |
-| `PRODUCT.md`, `DESIGN.md`, `.impeccable/design.json` | Product and design-system notes |
+```
+public/                     web root: the only folder the server exposes
+  index.html                the single-page UI
+  .htaccess                 Apache security headers
+  api/
+    simulate.php            standard scheduling endpoint
+    simulate_hypervisor.php hypervisor scheduling endpoint
+  assets/
+    css/styles.css
+    js/script.js
+    vendor/                 bundled GSAP and Lenis, with licences and checksums
+    fonts/                  bundled Barlow (latin subset)
+src/                        PHP library code, not web-reachable
+  bootstrap.php             constants, headers, CORS, rate limiting, JSON helpers
+  validation.php            request field validation
+  Timeline.php              the schedule recorder and metrics engine
+tests/check.php             backend self-check
+deploy/nginx.conf           example nginx server block
+```
+
+`PRODUCT.md`, `DESIGN.md` and `.impeccable/` hold product and design notes for the design tooling.
 
 ## License
 
