@@ -1,5 +1,7 @@
 # CPU Scheduling Simulator
 
+[![CI](https://github.com/Divyansh3105/CPU-Scheduling-Simulator-/actions/workflows/ci.yml/badge.svg)](https://github.com/Divyansh3105/CPU-Scheduling-Simulator-/actions/workflows/ci.yml)
+
 Compare CPU scheduling algorithms on one workload. Pick several algorithms, run once, and read them side by side on a shared clock. An optional hypervisor mode adds a VM scheduler on top.
 
 Built with plain HTML, CSS and vanilla JavaScript, plus two PHP endpoints. There is no build step.
