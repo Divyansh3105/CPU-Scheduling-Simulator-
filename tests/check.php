@@ -217,6 +217,28 @@ check('HV NUMA penalty on cross-node switches', by_pid($d, 'completion') == ['A'
     && count(array_filter($d['segments'], fn($s) => $s['pid'] === 'NUMA')) === 3);
 check('HV results no longer carry affinity', !array_key_exists('affinity', $d['results'][0]));
 
+// --- Decision log (simulate.php) ---
+$dec = fn(array $d) => array_map(fn($x) => [$x['time'], $x['pid'], $x['reason']], $d['decisions']);
+$vals = fn(array $x) => array_column($x['ready'], 'value', 'pid');
+
+$d = call('simulate.php', ['algorithm' => 'SJF', 'csOverhead' => 0, 'processes' => procs([['P1', 0, 8], ['P2', 1, 4], ['P3', 2, 2], ['P4', 3, 1]])]);
+check('SJF decisions', $dec($d) == [[0, 'P1', 'shortest_burst'], [8, 'P4', 'shortest_burst'], [9, 'P3', 'shortest_burst'], [11, 'P2', 'shortest_burst']]);
+check('SJF ready set at t=8', $vals($d['decisions'][1]) == ['P2' => 4, 'P3' => 2, 'P4' => 1]);
+
+$d = call('simulate.php', ['algorithm' => 'FCFS', 'csOverhead' => 0, 'processes' => $abc]);
+check('FCFS decisions', $dec($d) == [[0, 'A', 'first_arrived'], [5, 'B', 'first_arrived'], [20, 'C', 'first_arrived']]);
+
+$d = call('simulate.php', ['algorithm' => 'SRTF', 'csOverhead' => 0, 'processes' => procs([['A', 0, 7], ['B', 2, 2]])]);
+check('SRTF decisions only on change', $dec($d) == [[0, 'A', 'least_remaining'], [2, 'B', 'least_remaining'], [4, 'A', 'least_remaining']]);
+check('SRTF ready remaining at t=2', $vals($d['decisions'][1]) == ['A' => 5, 'B' => 2]);
+
+$d = call('simulate.php', ['algorithm' => 'RR', 'quantum' => 2, 'csOverhead' => 0, 'processes' => procs([['A', 0, 3], ['B', 0, 3]])]);
+check('RR decisions', $dec($d) == [[0, 'A', 'queue_front'], [2, 'B', 'queue_front'], [4, 'A', 'queue_front'], [5, 'B', 'queue_front']]);
+check('RR queue order at t=2', array_column($d['decisions'][1]['ready'], 'pid') == ['B', 'A']);
+
+$d = call('simulate.php', ['algorithm' => 'PRIORITYP', 'csOverhead' => 0, 'processes' => procs([['A', 0, 5, 3], ['B', 1, 2, 1]])]);
+check('PRIORITYP decisions', $dec($d) == [[0, 'A', 'best_priority'], [1, 'B', 'best_priority'], [3, 'A', 'best_priority']]);
+
 // --- Rate limiter ---
 $rlDir = sys_get_temp_dir() . '/cpusim-test-' . bin2hex(random_bytes(4));
 mkdir($rlDir);

@@ -11,6 +11,7 @@ class Timeline
     public array $first = [];
     public array $finish = [];
     public array $switches = [];
+    public array $decisions = [];
     private ?string $last = null;
     private array $procs;
     private int|float $overhead;
@@ -44,6 +45,16 @@ class Timeline
             $this->add('CS', $this->time + $cost, $vm);
         }
         $this->last = $pid;
+    }
+
+    // Why $pid was picked now. $ready: pid => comparison value (burst, remaining, priority, arrival or queue level).
+    public function decide(string $reason, string $pid, array $ready): void
+    {
+        $list = [];
+        foreach ($ready as $k => $v) {
+            $list[] = ['pid' => (string)$k, 'value' => $v];
+        }
+        $this->decisions[] = ['time' => $this->time, 'pid' => $pid, 'reason' => $reason, 'ready' => $list];
     }
 
     public function run(string $pid, int|float $len, string $vm): void
@@ -96,6 +107,7 @@ class Timeline
         return [
             'results' => $results,
             'segments' => $this->segments,
+            'decisions' => $this->decisions,
             'contextSwitches' => array_sum($this->switches),
         ];
     }

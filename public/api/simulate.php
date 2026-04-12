@@ -29,7 +29,7 @@ function effective_priority(int $base, int|float $waited, int $aging): int
 
 // FCFS / SJF / Priority: pick the ready process with the lowest $key($p, $now) and run it to completion.
 // Ties go to the earliest arrival because $procs is sorted by arrival and the comparison is strict.
-function run_nonpreemptive(array $procs, int|float $overhead, callable $key): array
+function run_nonpreemptive(array $procs, int|float $overhead, callable $key, string $reason): array
 {
     $tl = new Timeline($procs, $overhead);
     $pending = $procs;
@@ -44,6 +44,13 @@ function run_nonpreemptive(array $procs, int|float $overhead, callable $key): ar
             $tl->idleUntil(reset($pending)['arrival']);
             continue;
         }
+        $ready = [];
+        foreach ($pending as $q) {
+            if ($q['arrival'] <= $tl->time) {
+                $ready[$q['pid']] = $key($q, $tl->time);
+            }
+        }
+        $tl->decide($reason, $pending[$best]['pid'], $ready);
         $p = $pending[$best];
         unset($pending[$best]);
         $tl->switchTo($p['pid'], $p['vm']);
@@ -57,6 +64,7 @@ function run_srtf(array $procs, int|float $overhead): array
 {
     $tl = new Timeline($procs, $overhead);
     $left = count($procs);
+    $last = null;
     while ($left) {
         $best = null;
         foreach ($procs as $p) {
@@ -70,6 +78,16 @@ function run_srtf(array $procs, int|float $overhead): array
             continue;
         }
         $pid = $best['pid'];
+        if ($pid !== $last) {
+            $ready = [];
+            foreach ($procs as $p) {
+                if ($tl->rem[$p['pid']] > 0 && $p['arrival'] <= $tl->time) {
+                    $ready[$p['pid']] = $tl->rem[$p['pid']];
+                }
+            }
+            $tl->decide('least_remaining', $pid, $ready);
+            $last = $pid;
+        }
         $tl->switchTo($pid, $best['vm']);
         $tl->run($pid, min($tl->rem[$pid], next_arrival($procs, $tl) - $tl->time), $best['vm']);
         if ($tl->rem[$pid] <= 0) {
@@ -95,12 +113,14 @@ function run_priority_preemptive(array $procs, int|float $overhead, int $aging):
         $best = null;
         $bestKey = null;
         $lastKey = null;
+        $ready = [];
         foreach ($procs as $p) {
             $pid = $p['pid'];
             if ($tl->rem[$pid] <= 0 || $p['arrival'] > $tl->time) {
                 continue;
             }
             $key = effective_priority($p['priority'], $tl->time - $readySince[$pid], $aging);
+            $ready[$pid] = $key;
             if ($pid === $last) {
                 $lastKey = $key;
             }
@@ -117,6 +137,9 @@ function run_priority_preemptive(array $procs, int|float $overhead, int $aging):
             $best = $procs[array_search($last, array_column($procs, 'pid'), true)];
         }
         $pid = $best['pid'];
+        if ($pid !== $last) {
+            $tl->decide('best_priority', $pid, $ready);
+        }
         $len = min($tl->rem[$pid], next_arrival($procs, $tl) - $tl->time);
         if ($aging > 0) {
             $len = min($len, 1);
@@ -174,6 +197,13 @@ function run_feedback(array $procs, int|float $overhead, array $quanta, int $boo
 
         $p = array_shift($queues[$level]);
         $pid = $p['pid'];
+        $ready = [$pid => $level];
+        foreach ($queues as $i => $q) {
+            foreach ($q as $w) {
+                $ready[$w['pid']] = $i;
+            }
+        }
+        $tl->decide('queue_front', $pid, $ready);
         $tl->switchTo($pid, $p['vm']);
         $admit();
         $len = min($quanta[$level], $tl->rem[$pid]);
@@ -194,9 +224,9 @@ function run_feedback(array $procs, int|float $overhead, array $quanta, int $boo
 }
 
 respond(match ($algorithm) {
-    'FCFS' => run_nonpreemptive($processes, $csOverhead, fn($p, $t) => 0),
-    'SJF' => run_nonpreemptive($processes, $csOverhead, fn($p, $t) => $p['burst']),
-    'PRIORITY' => run_nonpreemptive($processes, $csOverhead, fn($p, $t) => effective_priority($p['priority'], $t - $p['arrival'], $aging)),
+    'FCFS' => run_nonpreemptive($processes, $csOverhead, fn($p, $t) => $p['arrival'], 'first_arrived'),
+    'SJF' => run_nonpreemptive($processes, $csOverhead, fn($p, $t) => $p['burst'], 'shortest_burst'),
+    'PRIORITY' => run_nonpreemptive($processes, $csOverhead, fn($p, $t) => effective_priority($p['priority'], $t - $p['arrival'], $aging), 'best_priority'),
     'PRIORITYP' => run_priority_preemptive($processes, $csOverhead, $aging),
     'SRTF' => run_srtf($processes, $csOverhead),
     'RR' => run_feedback($processes, $csOverhead, [$quantum]),
