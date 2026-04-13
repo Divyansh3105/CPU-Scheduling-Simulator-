@@ -1252,3 +1252,47 @@ section.detail {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------- Step-through ---------- */
+
+.stepper {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+}
+.stepper-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.stepper-bar h3 {
+  margin: 0 auto 0 0;
+  font: 600 15px/1 var(--font-cond);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.step-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+.step-row h4 {
+  margin: 0;
+  font: 600 14px/1.3 var(--font-cond);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.step-row p,
+.step-hint {
+  margin: 2px 0 0;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+.step-row b {
+  color: var(--ink);
+}
+.step-at,
+.step-queue {
+  color: var(--ink-3);
+}

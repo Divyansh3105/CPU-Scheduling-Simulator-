@@ -16,6 +16,8 @@
 <body>
     <svg width="0" height="0" class="sprite" aria-hidden="true">
         <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z" fill="currentColor" stroke="none"/></symbol>
+        <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14" stroke-width="3"/></symbol>
+        <symbol id="i-step" viewBox="0 0 24 24"><path d="M6 5v14l9-7z" fill="currentColor" stroke="none"/><path d="M18 5v14"/></symbol>
         <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
         <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
         <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.5l9.5 16.5h-19z"/><path d="M12 10v4.5M12 17.5v.5"/></symbol>
@@ -285,6 +287,19 @@
                 <div class="chart-foot">
                     <div class="legend" id="legend"></div>
                     <p class="chart-help">Drag or use arrow keys on the chart to move the clock. Hover a train to follow it across tracks.</p>
+                </div>
+                <div class="stepper" id="stepper" hidden>
+                    <div class="stepper-bar">
+                        <h3 id="step-title">Step through</h3>
+                        <button type="button" class="btn btn-quiet" id="stepBack">Back</button>
+                        <button type="button" class="btn btn-quiet" id="stepPlay" aria-pressed="false">
+                            <svg class="icon" aria-hidden="true"><use href="#i-play"/></svg><span>Play</span>
+                        </button>
+                        <button type="button" class="btn btn-quiet" id="stepNext">
+                            <svg class="icon" aria-hidden="true"><use href="#i-step"/></svg><span>Step</span>
+                        </button>
+                    </div>
+                    <div class="step-panel" id="stepPanel" aria-live="polite"></div>
                 </div>
             </section>
 
