@@ -217,7 +217,7 @@ function hypervisor_schedule(array $vms, array $processes, string $processAlgo, 
                 break;
             }
             unset($blocked[$pid]);
-            $queues[$proc[$pid]['vm']][] = $pid;
+            $queues[$proc[$pid]['vm']][] = (string)$pid; // array keys turn numeric pids into ints
         }
     };
     $dequeue = function ($vm, $pid) use (&$queues) {
