@@ -22,3 +22,9 @@ desktop.ini
 .impeccable/
 PRODUCT.md
 DESIGN.md
+
+# Node / Playwright
+node_modules/
+test-results/
+playwright-report/
+playwright.config.mjs

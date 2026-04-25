@@ -1,0 +1,11 @@
+{
+  "name": "cpu-scheduling-simulator",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "php tests/check.php && node tests/parity.mjs && playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.0"
+  }
+}
