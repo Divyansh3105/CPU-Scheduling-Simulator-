@@ -2,9 +2,13 @@
 
 [![CI](https://github.com/Divyansh3105/CPU-Scheduling-Simulator-/actions/workflows/ci.yml/badge.svg)](https://github.com/Divyansh3105/CPU-Scheduling-Simulator-/actions/workflows/ci.yml)
 
+**[Live demo](https://divyansh3105.github.io/CPU-Scheduling-Simulator-/)** (runs entirely in your browser)
+
+![Timetable with three algorithms on one clock, and the step-through panel](docs/screenshot.png)
+
 Compare CPU scheduling algorithms on one workload. Pick several algorithms, run once, and read them side by side on a shared clock. An optional hypervisor mode adds a VM scheduler on top.
 
-Built with plain HTML, CSS and vanilla JavaScript, plus two PHP endpoints. There is no build step.
+Built with plain HTML, CSS and vanilla JavaScript. The scheduler runs in the browser (`public/assets/js/engine/`), so the site can be hosted statically. The PHP endpoints are an equivalent implementation, kept in step by a parity test. There is no build step.
 
 ## Features
 
@@ -23,13 +27,15 @@ Built with plain HTML, CSS and vanilla JavaScript, plus two PHP endpoints. There
 
 ## Run it
 
-Requires PHP 8.1 or newer.
+Serve the `public/` folder with any static server. PHP 8.1 or newer works:
 
 ```bash
 php -S localhost:8000 -t public
 ```
 
-Then open <http://localhost:8000>. The web root is the `public/` folder, and the page must be served by PHP because it posts to `api/simulate.php` and `api/simulate_hypervisor.php`; opening `index.html` as a file won't work.
+Then open <http://localhost:8000>. Opening `index.html` as a file won't work (browsers block ES modules on `file://`). The page uses the JavaScript engine by default; add `?backend=php` to the URL to run the same request through the PHP endpoints instead.
+
+**GitHub Pages:** `.github/workflows/pages.yml` publishes `public/` on every push to `main`. Turn it on once under Settings > Pages > Source = GitHub Actions.
 
 GSAP and Lenis (animation and smooth scrolling) and the Barlow fonts are bundled in `public/assets/vendor/` and `public/assets/fonts/`, so the page makes no requests to third parties. See [public/assets/vendor/README.md](public/assets/vendor/README.md) for versions, licences and checksums.
 
@@ -85,10 +91,14 @@ Environment variables, read by the PHP endpoints:
 ## Tests
 
 ```bash
-php tests/check.php
+php tests/check.php        # PHP endpoints against hand-computed schedules
+node tests/parity.mjs      # JS engine vs PHP on ~1000 random workloads (needs php)
+npx playwright test        # browser smoke test (npm install first)
 ```
 
-Runs both endpoints from the command line against hand-computed schedules, checks that bad input is rejected, and unit-tests the rate limiter. It only runs from the command line. It prints one line per check and exits non-zero if any fail.
+`npm test` runs all three. Set `CHROMIUM_PATH` to reuse an installed Chromium instead of `npx playwright install chromium`.
+
+`check.php` runs both endpoints from the command line against hand-computed schedules, checks that bad input is rejected, and unit-tests the rate limiter. It only runs from the command line. It prints one line per check and exits non-zero if any fail.
 
 ## Project layout
 
@@ -101,14 +111,18 @@ public/                     web root: the only folder the server exposes
     simulate_hypervisor.php hypervisor scheduling endpoint
   assets/
     css/styles.css
-    js/script.js
+    js/                     ES modules: state, workload, run, api, results, chart, stepper, presets, main
+      engine/               the scheduler in JavaScript (timeline, validate, simulate, hypervisor)
     vendor/                 bundled GSAP and Lenis, with licences and checksums
     fonts/                  bundled Barlow (latin subset)
 src/                        PHP library code, not web-reachable
   bootstrap.php             constants, headers, CORS, rate limiting, JSON helpers
   validation.php            request field validation
   Timeline.php              the schedule recorder and metrics engine
-tests/check.php             backend self-check
+tests/check.php             PHP endpoint self-check
+tests/parity.mjs            JS engine vs PHP cross-check
+tests/e2e/                  Playwright smoke test
+docs/screenshot.png         README screenshot
 deploy/nginx.conf           example nginx server block
 ```
 
