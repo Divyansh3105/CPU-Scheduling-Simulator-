@@ -8,7 +8,7 @@ import { simulateHypervisor } from "../public/assets/js/engine/hypervisor.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const php = (endpoint, payload) => {
-  const r = spawnSync("php", [`${root}public/api/${endpoint}`], { input: JSON.stringify(payload), encoding: "utf8" });
+  const r = spawnSync("php", [`${root}public/api/${endpoint}`], { input: JSON.stringify(payload), encoding: "utf8", maxBuffer: 1 << 28 });
   return JSON.parse(r.stdout);
 };
 
@@ -22,7 +22,7 @@ const pick = (a) => a[rnd(a.length)];
 
 function workload(withVms) {
   const vms = withVms
-    ? ["A", "B", "V3", "D"].slice(0, 2 + rnd(3)).map((name) => ({
+    ? ["A", "B", "3", "D"].slice(0, 2 + rnd(3)).map((name) => ({
         name, priority: 1 + rnd(5), cpuShare: 10 + rnd(40), memory: pick([512, 2048, 4096]), type: pick(["compute", "memory", "realtime", "standard"]),
       }))
     : [];
@@ -72,6 +72,14 @@ for (let i = 0; i < cases; i++) {
 // Validation errors must match too.
 compare("bad algorithm", "simulate.php", { algorithm: "NOPE", processes: workload(false).processes }, simulate);
 compare("no processes", "simulate.php", { processes: [] }, simulate);
+const P = (pid, burst = 2, extra = {}) => ({ pid, arrival: 0, burst, ...extra });
+compare("__proto__ pid", "simulate.php", { processes: [P("__proto__")] }, simulate);
+compare("__proto__ vm", "simulate_hypervisor.php", { processes: [P("X", 2, { vm: "__proto__" })], vms: [{ name: "__proto__" }] }, simulateHypervisor);
+compare("hex number", "simulate.php", { processes: [{ pid: "X", arrival: 0, burst: "0x1A" }] }, simulate);
+compare("total burst cap", "simulate.php", { processes: Array.from({ length: 21 }, (_, i) => P("P" + i, 1000)) }, simulate);
+const big = Array.from({ length: 20 }, (_, i) => P("P" + i, 1000, { vm: i % 2 ? "A" : "B", ioTime: 3 }));
+compare("largest allowed RR", "simulate.php", { algorithm: "RR", quantum: 1, csOverhead: 5, processes: big }, simulate);
+compare("largest allowed hypervisor", "simulate_hypervisor.php", { processAlgo: "RR", processQuantum: 1, vmQuantum: 1, csOverhead: 5, enableIOScheduling: true, enableCaching: true, enableNUMA: true, processes: big, vms: [{ name: "A" }, { name: "B" }] }, simulateHypervisor);
 compare("unknown vm", "simulate_hypervisor.php", { processes: [{ pid: "X", arrival: 0, burst: 2, vm: "Ghost" }], vms: [] }, simulateHypervisor);
 
 console.log(failures ? `\n${failures} of ${total} cases differ` : `\nAll ${total} cases match PHP`);

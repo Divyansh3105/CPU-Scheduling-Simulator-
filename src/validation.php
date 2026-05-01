@@ -44,7 +44,7 @@ function name_field(mixed $value, string $name, ?string $default = null): string
         fail(400, "$name must be a string");
     }
     $value = trim((string)$value);
-    if (!preg_match(NAME_PATTERN, $value)) {
+    if (!preg_match(NAME_PATTERN, $value) || $value === '__proto__') { // reserved: it breaks plain JS objects in the browser engine
         fail(400, "$name must be 1-32 characters: letters, digits, space, _ . -");
     }
     return $value;
@@ -124,6 +124,9 @@ function validate_processes(mixed $list): array
         ];
     }
 
+    if (array_sum(array_column($out, 'burst')) > MAX_TOTAL_BURST) {
+        fail(400, 'Total burst time must be at most ' . MAX_TOTAL_BURST);
+    }
     $out = array_values($out);
     usort($out, fn($a, $b) => $a['arrival'] <=> $b['arrival']);
     return $out;

@@ -75,10 +75,10 @@ check('RR completion', by_pid($d, 'completion') == ['P1' => 9, 'P2' => 8, 'P3' =
 $d = call('simulate.php', ['algorithm' => 'MLFQ', 'quantum' => 1, 'processes' => procs([['A', 0, 7]])]);
 check('MLFQ single process', by_pid($d, 'completion') == ['A' => 7] && $d['contextSwitches'] === 0 && count($d['segments']) === 1);
 
-$big = procs(array_map(fn($i) => ["P$i", $i, 1000], range(1, 100)));
+$big = procs(array_map(fn($i) => ["P$i", $i, 1000], range(1, 20)));
 $t = microtime(true);
 $d = call('simulate.php', ['algorithm' => 'SRTF', 'processes' => $big]);
-check('SRTF 100 x 1000 is fast', !isset($d['error']) && microtime(true) - $t < 5);
+check('SRTF 20 x 1000 is fast', !isset($d['error']) && microtime(true) - $t < 5);
 
 $rejects = [
     'quantum 0' => ['algorithm' => 'RR', 'quantum' => 0, 'processes' => $abc],
@@ -238,6 +238,14 @@ check('RR queue order at t=2', array_column($d['decisions'][1]['ready'], 'pid') 
 
 $d = call('simulate.php', ['algorithm' => 'PRIORITYP', 'csOverhead' => 0, 'processes' => procs([['A', 0, 5, 3], ['B', 1, 2, 1]])]);
 check('PRIORITYP decisions', $dec($d) == [[0, 'A', 'best_priority'], [1, 'B', 'best_priority'], [3, 'A', 'best_priority']]);
+
+// --- Reserved names, work cap, numeric VM names ---
+$d = call('simulate.php', ['processes' => procs([['__proto__', 0, 2]])]);
+check('__proto__ pid rejected', isset($d['error']));
+$d = call('simulate.php', ['processes' => procs(array_map(fn($i) => ["P$i", 0, 1000], range(0, 20)))]);
+check('total burst capped', str_contains($d['error'] ?? '', 'Total burst'));
+$d = call('simulate_hypervisor.php', ['processes' => procs([['A', 0, 2, 5, '3']]), 'vms' => [['name' => '3']]]);
+check('numeric VM name stays a string', $d['results'][0]['vm'] === '3' && $d['segments'][0]['vm'] === '3' && $d['vmStats'][0]['vm'] === '3');
 
 // --- Rate limiter ---
 $rlDir = sys_get_temp_dir() . '/cpusim-test-' . bin2hex(random_bytes(4));

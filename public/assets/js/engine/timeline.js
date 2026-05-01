@@ -8,6 +8,7 @@ export class Timeline {
     this.time = 0;
     this.segments = [];
     this.decisions = [];
+    this.decisionsTruncated = false;
     this.rem = {};
     this.first = {};
     this.finish = {};
@@ -36,6 +37,10 @@ export class Timeline {
 
   // Why pid was picked now. ready: array of [pid, comparison value].
   decide(reason, pid, ready) {
+    if (this.decisions.length >= 1000) { // each entry holds the whole ready set, so the log is capped
+      this.decisionsTruncated = true;
+      return;
+    }
     this.decisions.push({ time: this.time, pid, reason, ready: ready.map(([p, value]) => ({ pid: p, value })) });
   }
 
@@ -79,6 +84,7 @@ export class Timeline {
       results,
       segments: this.segments,
       decisions: this.decisions,
+      decisionsTruncated: this.decisionsTruncated,
       contextSwitches: Object.values(this.switches).reduce((a, b) => a + b, 0),
     };
   }

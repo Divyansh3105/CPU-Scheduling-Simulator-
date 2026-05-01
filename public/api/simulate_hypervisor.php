@@ -109,7 +109,7 @@ function hypervisor_schedule(array $vms, array $processes, string $processAlgo, 
     mt_srand($seed); // lottery draws are reproducible for the same input
     $tl = new Timeline($processes, $csOverhead);
     $cache = new CPUCache();
-    $vmNames = array_keys($vms);
+    $vmNames = array_map('strval', array_keys($vms)); // array keys turn numeric VM names into ints
 
     // Memory ballooning: when overcommitted, every VM is squeezed proportionally into physical memory.
     $effectiveMemory = array_map(fn($v) => $v['memory'], $vms);

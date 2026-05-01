@@ -59,7 +59,8 @@ The server validates every request and returns a 4xx with a message if a limit i
 | Field | Limit |
 | --- | --- |
 | Processes / VMs | up to 100 / 20 |
-| Process ID, VM name | 1–32 characters: letters, digits, space, `_ . -` (`Host` is reserved) |
+| Process ID, VM name | 1–32 characters: letters, digits, space, `_ . -` (`Host` and `__proto__` are reserved) |
+| Total burst time | at most 20000 across all processes (keeps the schedule and response small) |
 | Arrival | 0–10000 |
 | Burst | 1–1000 |
 | Quantum, VM time slice | 1–1000 |

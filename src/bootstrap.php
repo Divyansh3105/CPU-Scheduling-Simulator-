@@ -10,6 +10,7 @@ const MAX_PROCESSES = 100;
 const MAX_VMS = 20;
 const MAX_ARRIVAL = 10000;
 const MAX_BURST = 1000;
+const MAX_TOTAL_BURST = 20000; // keeps the schedule (and the response) within PHP's memory limit
 const MAX_QUANTUM = 1000;
 const NAME_PATTERN = '/^[A-Za-z0-9_.\- ]{1,32}$/';
 
@@ -118,6 +119,9 @@ function respond(mixed $data): never
 function read_input(): array
 {
     $source = PHP_SAPI === 'cli' ? 'php://stdin' : 'php://input';
+    if (PHP_SAPI !== 'cli' && stripos($_SERVER['CONTENT_TYPE'] ?? '', 'application/json') !== 0) {
+        fail(415, 'Content-Type must be application/json');
+    }
     $raw = file_get_contents($source, false, null, 0, MAX_BODY_BYTES + 1);
     if ($raw === false || strlen($raw) > MAX_BODY_BYTES) {
         fail(413, 'Request body too large');

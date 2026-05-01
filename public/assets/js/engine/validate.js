@@ -1,15 +1,19 @@
 // Port of src/validation.php. Throws Error with the same messages the PHP endpoints return.
 export const MAX_PROCESSES = 100;
 export const MAX_VMS = 20;
-export const MAX_ARRIVAL = 10000;
-export const MAX_BURST = 1000;
+const MAX_ARRIVAL = 10000;
+const MAX_BURST = 1000;
+const MAX_TOTAL_BURST = 20000; // keeps the schedule (and the page) fast
 export const MAX_QUANTUM = 1000;
-export const NAME_RE = /^[A-Za-z0-9_.\- ]{1,32}$/;
+// __proto__ is reserved: it would break the plain objects the engine keys by name.
+export const NAME_RE = /^(?!__proto__$)[A-Za-z0-9_.\- ]{1,32}$/;
 
 const fail = (msg) => {
   throw new Error(msg);
 };
-const isNum = (v) => typeof v === "number" || (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)));
+// Same strings PHP's is_numeric() accepts (no hex, no "Infinity").
+const NUMERIC = /^\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*$/;
+const isNum = (v) => (typeof v === "number" && Number.isFinite(v)) || (typeof v === "string" && NUMERIC.test(v));
 
 export function intField(value, name, min, max, def = null) {
   if (value === null || value === undefined || value === "") {
@@ -83,5 +87,6 @@ export function validateProcesses(list) {
       vm: nameField(p.vm, `${pid}.vm`, "Host"),
     });
   });
+  if (out.reduce((s, p) => s + p.burst, 0) > MAX_TOTAL_BURST) fail(`Total burst time must be at most ${MAX_TOTAL_BURST}`);
   return out.sort((a, b) => a.arrival - b.arrival);
 }
