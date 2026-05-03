@@ -16,8 +16,29 @@ export function niceStep(span, maxTicks) {
   return Math.max([1, 2, 5, 10].find((m) => m * pow >= raw) * pow, 1);
 }
 
+// Segments are in time order and do not overlap, so binary search for the last one starting at or before t.
 export function segmentAt(run, t) {
-  return run.data.segments.find((s) => s.start <= t && t < s.end) || null;
+  const segs = run.data.segments;
+  let lo = 0;
+  let hi = segs.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (segs[mid].start <= t) lo = mid;
+    else hi = mid - 1;
+  }
+  const s = segs[lo];
+  return s && s.start <= t && t < s.end ? s : null;
+}
+
+// Pointer moves can fire faster than the screen refreshes; draw at most once per frame.
+let drawQueued = false;
+function queueDraw() {
+  if (drawQueued) return;
+  drawQueued = true;
+  requestAnimationFrame(() => {
+    drawQueued = false;
+    drawChart();
+  });
 }
 
 export function cssVar(name) {
@@ -314,7 +335,7 @@ export function setClock(t) {
   state.clock = t;
   renderReadout();
   renderStep();
-  drawChart();
+  queueDraw();
 }
 
 export function setHover(pid, info = null) {
@@ -322,7 +343,7 @@ export function setHover(pid, info = null) {
   state.hoverPid = pid;
   canvas.style.cursor = pid ? "pointer" : "crosshair";
   renderReadout(info);
-  drawChart();
+  queueDraw();
 }
 
 export function renderReadout(info = null) {
@@ -345,8 +366,9 @@ export function renderReadout(info = null) {
   const t = state.clock;
   const parts = state.runs.map((r) => {
     const s = segmentAt(r, t);
+    const done = !s && t >= (r.data.segments.at(-1)?.end ?? 0);
     const what =
-      !s || s.pid === "IDLE" ? "idle" : s.pid === "CS" ? "switching" : s.pid === "MIGRATION" ? "migrating" : `<b>${esc(s.pid)}</b>`;
+      done ? "done" : !s || s.pid === "IDLE" ? "idle" : s.pid === "CS" ? "switching" : s.pid === "MIGRATION" ? "migrating" : `<b>${esc(s.pid)}</b>`;
     return `${ALGO_LABELS[r.algo]} ${what}`;
   });
   el.innerHTML = `<span class="now">t = ${fmtTime(t)}</span> · ${parts.join(" · ")}`;

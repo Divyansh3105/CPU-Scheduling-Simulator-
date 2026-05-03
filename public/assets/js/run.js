@@ -112,8 +112,13 @@ export function metricsOf(data) {
   };
 }
 
+// Memoised per run set: it is read on every redraw.
+let endOf = null;
+let endValue = 1;
 export function timelineEnd() {
-  return (
-    state.runs.reduce((m, r) => r.data.segments.reduce((mm, s) => Math.max(mm, s.end), m), 0) || 1
-  );
+  if (endOf !== state.runs) {
+    endOf = state.runs;
+    endValue = state.runs.reduce((m, r) => Math.max(m, r.data.segments.at(-1)?.end ?? 0), 0) || 1;
+  }
+  return endValue;
 }

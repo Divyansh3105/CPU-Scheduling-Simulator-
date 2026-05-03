@@ -1,6 +1,5 @@
-// Must match NAME_PATTERN / MAX_PROCESSES in src/bootstrap.php
-export const NAME_RE = /^[A-Za-z0-9_.\- ]{1,32}$/;
-export const MAX_PROCESSES = 100;
+// One definition, shared with the engine (and matching NAME_PATTERN / MAX_PROCESSES in src/bootstrap.php).
+export { MAX_PROCESSES, NAME_RE } from "./engine/validate.js";
 
 
 export const ALGO_LABELS = {
@@ -59,15 +58,12 @@ export function paint(root) {
 
 export const icon = (id) => `<svg class="icon" aria-hidden="true"><use href="#${id}"/></svg>`;
 
+// A process keeps its colour for as long as the workload lives, even if others are removed.
+const colorIndex = new Map();
+export const resetColors = () => colorIndex.clear();
 export function colorFor(pid) {
-  const idx = state.processes.findIndex((p) => p.pid === pid);
-  return ROUTE_COLORS[(idx === -1 ? hashIndex(pid) : idx) % ROUTE_COLORS.length];
-}
-
-export function hashIndex(str) {
-  let h = 0;
-  for (const ch of String(str)) h = (h * 31 + ch.charCodeAt(0)) | 0;
-  return Math.abs(h);
+  if (!colorIndex.has(pid)) colorIndex.set(pid, colorIndex.size);
+  return ROUTE_COLORS[colorIndex.get(pid) % ROUTE_COLORS.length];
 }
 
 /* ---------------- Toasts ---------------- */

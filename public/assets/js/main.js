@@ -3,6 +3,9 @@ import { renderResults } from "./results.js";
 import { reduceMotion } from "./state.js";
 import { renderProcessTable, renderVMOptions, renderVMTable } from "./workload.js";
 
+// Pages hosting cannot send frame-ancestors, so hide the app if something frames it.
+if (window.top !== window.self) document.documentElement.hidden = true;
+
 /* ---------------- Smooth scrolling ---------------- */
 
 if (window.Lenis && window.gsap && !reduceMotion.matches) {

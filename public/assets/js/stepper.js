@@ -48,7 +48,8 @@ export function renderStep() {
               `<p class="step-queue">Ready at t ${fmtTime(t)}: ${ready.length ? listOf(ready) : "nobody waiting"}</p></div>`
             );
           })
-          .join("");
+          .join("") +
+        (state.runs.some((r) => r.data.decisionsTruncated) ? `<p class="step-hint">Reasons are logged for the first 1000 dispatches of each run.</p>` : "");
 }
 
 // Step jumps to the next (or previous) moment any track made a dispatch decision.

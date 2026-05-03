@@ -1,6 +1,6 @@
 import { PROCESS_PRESETS, VM_PRESETS } from "./presets.js";
 import { runSimulation } from "./run.js";
-import { $, MAX_PROCESSES, NAME_RE, colorFor, esc, icon, paint, showNotification, state } from "./state.js";
+import { $, MAX_PROCESSES, NAME_RE, colorFor, esc, icon, paint, resetColors, showNotification, state } from "./state.js";
 
 let processCounter = 1;
 let autoProcessInterval = null;
@@ -79,6 +79,7 @@ $("processPreset").addEventListener("change", (e) => {
   const preset = PROCESS_PRESETS[e.target.value];
   e.target.value = "";
   if (!preset) return;
+  resetColors();
   state.processes = preset.map((p) => ({ ...p, vm: "Host" }));
   workloadChanged();
   showNotification("Preset workload loaded.", "success");
@@ -86,6 +87,7 @@ $("processPreset").addEventListener("change", (e) => {
 
 $("clearProcessesBtn").addEventListener("click", () => {
   if (!state.processes.length || !confirm("Remove every process from the workload?")) return;
+  resetColors();
   state.processes = [];
   processCounter = 1;
   workloadChanged();
