@@ -80,7 +80,7 @@ class CPUCache {
   }
 }
 
-function validateVms(list, processes) {
+export function validateVms(list, processes) {
   if (!Array.isArray(list)) throw new Error("vms must be an array");
   if (list.length > MAX_VMS) throw new Error(`At most ${MAX_VMS} VMs are allowed`);
   const vms = new Map();
