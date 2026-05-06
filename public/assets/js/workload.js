@@ -109,11 +109,11 @@ export function renderProcessTable() {
     .map(
       (p) => `<tr>
         <td><span class="pid"><i class="swatch" data-c="${colorFor(p.pid)}"></i>${esc(p.pid)}</span></td>
-        <td class="num">${esc(p.arrival)}</td>
-        <td class="num">${esc(p.burst)}</td>
-        <td class="num">${esc(p.priority)}</td>
-        <td class="num">${esc(p.ioTime)}${p.ioTime && p.ioAt?.length ? `<span class="hint"> @${esc(p.ioAt.join(","))}</span>` : ""}</td>
-        <td class="num">${esc(p.memReq)}</td>
+        <td class="num">${cell(p, "arrival")}</td>
+        <td class="num">${cell(p, "burst")}</td>
+        <td class="num">${cell(p, "priority")}</td>
+        <td class="num">${cell(p, "ioTime")}${p.ioTime && p.ioAt?.length ? `<span class="hint"> @${esc(p.ioAt.join(","))}</span>` : ""}</td>
+        <td class="num">${cell(p, "memReq")}</td>
         <td>${p.vm === "Host" ? "Host" : `<span class="tag">${esc(p.vm)}</span>`}</td>
         <td><button type="button" class="icon-btn" data-pid="${esc(p.pid)}" aria-label="Remove ${esc(p.pid)}">${icon("i-x")}</button></td>
       </tr>`
@@ -123,6 +123,29 @@ export function renderProcessTable() {
   tbody.querySelectorAll(".icon-btn").forEach((btn) =>
     btn.addEventListener("click", () => removeProcess(btn.dataset.pid))
   );
+  tbody.querySelectorAll("input.cell").forEach((input) => input.addEventListener("change", () => editCell(input)));
+}
+
+// Same limits as the engine; a number input is edited in place instead of removing and re-adding the process.
+const FIELD_RANGE = { arrival: [0, 10000], burst: [1, 1000], priority: [1, 10], ioTime: [0, 1000], memReq: [1, 65536] };
+const cell = (p, field) =>
+  `<input class="cell" type="number" inputmode="numeric" data-pid="${esc(p.pid)}" data-field="${field}" value="${esc(p[field])}" min="${FIELD_RANGE[field][0]}" max="${FIELD_RANGE[field][1]}" aria-label="${esc(p.pid)} ${field}">`;
+
+function editCell(input) {
+  const p = state.processes.find((q) => q.pid === input.dataset.pid);
+  const [min, max] = FIELD_RANGE[input.dataset.field];
+  const value = Number(input.value);
+  const total = state.processes.reduce((s, q) => s + (q === p && input.dataset.field === "burst" ? value : q.burst), 0);
+  if (!p || input.value === "" || !Number.isInteger(value) || value < min || value > max || total > 20000) {
+    input.classList.add("invalid");
+    showNotification(`${input.dataset.field} must be a whole number from ${min} to ${max} (total burst at most 20000).`, "error");
+    input.value = p?.[input.dataset.field] ?? "";
+    setTimeout(() => input.classList.remove("invalid"), 1500);
+    return;
+  }
+  p[input.dataset.field] = value;
+  if (input.dataset.field === "burst") p.ioAt = (p.ioAt ?? []).filter((n) => n < value);
+  markStale();
 }
 
 /* ---------------- Workload: VMs ---------------- */
@@ -289,6 +312,7 @@ document
 // Once a timetable exists, every setting change re-runs all selected algorithms.
 export let settingsTimer = null;
 export function settingsChanged() {
+  document.dispatchEvent(new Event("cpusim:changed"));
   if (!state.hasRun || state.stale) return;
   clearTimeout(settingsTimer);
   settingsTimer = setTimeout(runSimulation, 250);
@@ -297,6 +321,12 @@ export function settingsChanged() {
 export function workloadChanged() {
   renderProcessTable();
   renderVMTable();
+  markStale();
+}
+
+// Edits that keep the table as it is (so focus stays put) only need the chart flagged and the workload saved.
+export function markStale() {
+  document.dispatchEvent(new Event("cpusim:changed"));
   if (state.hasRun && !state.stale) {
     state.stale = true;
     $("chartWrap").classList.add("is-stale");

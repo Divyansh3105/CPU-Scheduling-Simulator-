@@ -1,15 +1,15 @@
 import { drawChart, segmentAt, setClock } from "./chart.js";
-import { $, ALGO_LABELS, esc, fmtTime, icon, state } from "./state.js";
+import { $, esc, fmtTime, icon, state } from "./state.js";
 
 /* ---------------- Step-through ---------------- */
 
 export const listOf = (items) => items.map(esc).join(", ");
 
 // Plain-English reason for one dispatch from the backend's decision log.
-export function reasonText(algo, d) {
+export function reasonText(label, algo, d) {
   const among = d.ready.map((r) => `${r.pid} (${fmtTime(r.value)})`).join(", ");
   const only = d.ready.length === 1;
-  const who = `${ALGO_LABELS[algo]} picks <b>${esc(d.pid)}</b>`;
+  const who = `${esc(label)} picks <b>${esc(d.pid)}</b>`;
   if (only) return `${who}: the only process ready.`;
   switch (d.reason) {
     case "first_arrived": return `${who}: arrived first among ${esc(among)}.`;
@@ -43,8 +43,8 @@ export function renderStep() {
             const d = run.data.decisions?.filter((x) => x.time <= t).pop();
             const ready = readyAt(run, t);
             return (
-              `<div class="step-row"><h4>${ALGO_LABELS[run.algo]}</h4>` +
-              `<p>${d ? reasonText(run.algo, d) + ` <span class="step-at">(decided at t ${fmtTime(d.time)})</span>` : "No dispatch yet."}</p>` +
+              `<div class="step-row"><h4>${esc(run.label)}</h4>` +
+              `<p>${d ? reasonText(run.label, run.base, d) + ` <span class="step-at">(decided at t ${fmtTime(d.time)})</span>` : "No dispatch yet."}</p>` +
               `<p class="step-queue">Ready at t ${fmtTime(t)}: ${ready.length ? listOf(ready) : "nobody waiting"}</p></div>`
             );
           })

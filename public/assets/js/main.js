@@ -1,5 +1,9 @@
 import { drawChart } from "./chart.js";
+import { restore } from "./persist.js";
+import { renderPins } from "./pins.js";
+import "./alt.js";
 import { renderResults } from "./results.js";
+import "./theme.js";
 import { reduceMotion } from "./state.js";
 import { renderProcessTable, renderVMOptions, renderVMTable } from "./workload.js";
 
@@ -19,5 +23,7 @@ if (window.Lenis && window.gsap && !reduceMotion.matches) {
 renderProcessTable();
 renderVMTable();
 renderVMOptions();
+renderPins();
 renderResults();
+restore();
 document.fonts?.ready.then(drawChart);

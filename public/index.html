@@ -11,6 +11,7 @@
     <link rel="preload" href="assets/fonts/Barlow-400.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="preload" href="assets/fonts/BarlowSemiCondensed-600.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="assets/css/styles.css">
+    <script src="assets/js/theme-init.js"></script>
 </head>
 
 <body>
@@ -40,6 +41,7 @@
                 <span class="switch-track" aria-hidden="true"></span>
                 <span>Hypervisor<span class="long"> mode</span></span>
             </label>
+            <button type="button" class="btn-ghost" id="themeBtn" title="Switch between light, dark and high contrast">Theme: Light</button>
             <button type="button" class="btn btn-run" id="runBtn">
                 <svg class="icon" aria-hidden="true"><use href="#i-play"/></svg>
                 <span>Run timetable</span>
@@ -218,6 +220,10 @@
                         <label class="chip"><input type="checkbox" value="RR" checked><span>Round Robin</span></label>
                         <label class="chip"><input type="checkbox" value="MLFQ"><span>MLFQ</span></label>
                     </div>
+                    <div class="pin-row">
+                        <button type="button" class="btn btn-quiet" id="pinBtn" title="Keep the checked algorithms with the current settings as their own tracks, so you can change settings and compare">Pin with these settings</button>
+                        <div class="pins" id="pins"></div>
+                    </div>
                 </fieldset>
 
                 <div class="settings">
@@ -274,7 +280,7 @@
                     <p class="readout" id="clockReadout" aria-live="polite">Add processes, pick algorithms, then run.</p>
                 </div>
                 <div class="chart-wrap" id="chartWrap">
-                    <canvas id="timetable" tabindex="0" role="img" aria-label="Timetable chart. Run a schedule to draw it."></canvas>
+                    <canvas id="timetable" tabindex="0" role="img" aria-describedby="altBox" aria-label="Timetable chart. Run a schedule to draw it."></canvas>
                     <div class="chart-empty" id="chartEmpty">
                         <p>No timetable yet</p>
                         <span>Load a preset workload on the left and press <b>Run timetable</b>. Each algorithm gets its own track on one shared clock.</span>
@@ -284,6 +290,29 @@
                         Workload changed. Run again to update the timetable.
                     </div>
                 </div>
+                <div class="zoom" role="group" aria-label="Zoom and pan the timetable">
+                    <button type="button" class="btn btn-quiet" id="zoomOut">Zoom out</button>
+                    <button type="button" class="btn btn-quiet" id="zoomIn">Zoom in</button>
+                    <button type="button" class="btn btn-quiet" id="zoomFit" disabled>Fit</button>
+                    <input type="range" id="panRange" min="0" max="1000" value="0" aria-label="Pan along the timeline" hidden>
+                    <span class="zoom-hint">Ctrl + wheel zooms, Shift + wheel pans, + / - on the chart</span>
+                </div>
+                <div class="tools" id="tools">
+                    <button type="button" class="btn btn-quiet" id="shareBtn">Share link</button>
+                    <button type="button" class="btn btn-quiet" id="exportJsonBtn">Export JSON</button>
+                    <button type="button" class="btn btn-quiet" id="exportCsvBtn">Export CSV</button>
+                    <button type="button" class="btn btn-quiet" id="importBtn">Import</button>
+                    <button type="button" class="btn btn-quiet" id="pngBtn">Save PNG</button>
+                    <input type="file" id="importFile" accept=".json,.csv,application/json,text/csv" hidden>
+                </div>
+                <details class="alt" id="altBox" hidden>
+                    <summary>Timetable as a table (text alternative to the chart)</summary>
+                    <div class="field inline">
+                        <label for="altTrack">Track</label>
+                        <select id="altTrack"></select>
+                    </div>
+                    <div class="table-scroll alt-scroll" id="altData" tabindex="0" role="region" aria-label="Timetable data"></div>
+                </details>
                 <div class="chart-foot">
                     <div class="legend" id="legend"></div>
                     <p class="chart-help">Drag or use arrow keys on the chart to move the clock. Hover a train to follow it across tracks.</p>

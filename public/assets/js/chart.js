@@ -1,6 +1,6 @@
 import { selectRun } from "./results.js";
 import { timelineEnd } from "./run.js";
-import { $, ALGO_LABELS, SPECIAL, colorFor, esc, fmt, fmtTime, reduceMotion, state } from "./state.js";
+import { $, SPECIAL, colorFor, esc, fmt, fmtTime, reduceMotion, state } from "./state.js";
 import { renderStep } from "./stepper.js";
 
 /* ---------------- Timetable chart ---------------- */
@@ -62,6 +62,8 @@ export function drawChart() {
   const blue = cssVar("--blue");
   const blueWash = cssVar("--blue-wash");
   const signal = cssVar("--signal");
+  const paper = cssVar("--paper");
+  hatchFill = cssVar("--sheet");
 
   const W = wrap.clientWidth;
   const left = W < 520 ? 92 : G.left;
@@ -75,9 +77,11 @@ export function drawChart() {
 
   const end = timelineEnd();
   const plotW = Math.max(40, W - left - G.right);
-  const x = (t) => left + (t / end) * plotW;
+  const [v0, v1] = state.view ?? [0, end];
+  const span = v1 - v0;
+  const x = (t) => left + ((t - v0) / span) * plotW;
   const tracksTop = G.axis + G.arrivals;
-  state.geom = { left, plotW, end, top: tracksTop };
+  state.geom = { left, plotW, end, v0, v1, top: tracksTop };
 
   // Selected track band
   runs.forEach((r, i) => {
@@ -87,11 +91,11 @@ export function drawChart() {
   });
 
   // Clock grid: every tick ruled, every fifth heavier, like timetable hour columns
-  const step = niceStep(end, plotW / 64);
+  const step = niceStep(span, plotW / 64);
   ctx.font = `600 12px ${COND}`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  for (let t = 0, k = 0; t <= end + 1e-9; t += step, k++) {
+  for (let k = Math.ceil(v0 / step - 1e-9), t = k * step; t <= v1 + 1e-9; k++, t = k * step) {
     const gx = Math.round(x(t)) + 0.5;
     ctx.strokeStyle = k % 5 === 0 ? ruleStrong : rule;
     ctx.lineWidth = 1;
@@ -113,6 +117,7 @@ export function drawChart() {
     .slice()
     .sort((a, b) => a.arrival - b.arrival)
     .forEach((p) => {
+      if (p.arrival < v0 || p.arrival > v1) return;
       const ax = x(p.arrival);
       ctx.globalAlpha = state.hoverPid && state.hoverPid !== p.pid ? 0.25 : 1;
       ctx.fillStyle = colorFor(p.pid);
@@ -143,7 +148,7 @@ export function drawChart() {
     ctx.textAlign = "left";
     ctx.fillStyle = selected ? blue : ink;
     ctx.font = `700 15px ${COND}`;
-    ctx.fillText(left < G.left ? r.algo : ALGO_LABELS[r.algo], 12, mid - 8);
+    ctx.fillText(r.label, 12, mid - 8);
     ctx.fillStyle = ink3;
     ctx.font = `500 12px Barlow, sans-serif`;
     ctx.fillText(`wait ${fmt(r.metrics.waiting)}`, 12, mid + 9);
@@ -164,7 +169,7 @@ export function drawChart() {
     const top = mid - G.bar / 2;
     ctx.font = `700 12px ${COND}`;
     r.data.segments.forEach((s) => {
-      if (s.pid === "IDLE") return;
+      if (s.pid === "IDLE" || s.end < v0 || s.start > v1) return;
       const sx = x(s.start);
       const sw = Math.max(1, x(s.end) - sx);
       if (SPECIAL[s.pid]) {
@@ -174,7 +179,7 @@ export function drawChart() {
       ctx.globalAlpha = state.hoverPid && state.hoverPid !== s.pid ? 0.18 : 1;
       ctx.fillStyle = colorFor(s.pid);
       ctx.fillRect(sx, top, sw, G.bar);
-      ctx.fillStyle = "#fff";
+      ctx.fillStyle = paper;
       ctx.fillRect(sx + sw - 1, top, 1, G.bar); // hairline between consecutive trains
       const label = String(s.pid);
       if (ctx.measureText(label).width + 8 < sw) {
@@ -186,6 +191,7 @@ export function drawChart() {
 
     // Departure ticks: where each train finishes its run on this track
     r.data.results.forEach((p) => {
+      if (p.completion < v0 || p.completion > v1) return;
       const dx = Math.round(x(p.completion)) - 1;
       ctx.globalAlpha = state.hoverPid && state.hoverPid !== p.pid ? 0.18 : 1;
       ctx.fillStyle = colorFor(p.pid);
@@ -203,7 +209,7 @@ export function drawChart() {
   });
 
   // The clock hand: one red line through every track
-  if (state.clock !== null) {
+  if (state.clock !== null && state.clock >= v0 && state.clock <= v1) {
     const cx = Math.round(x(state.clock)) + 0.5;
     ctx.strokeStyle = signal;
     ctx.lineWidth = 2;
@@ -226,16 +232,17 @@ export function drawChart() {
   canvas.setAttribute(
     "aria-label",
     `Timetable of ${runs.length} algorithm${runs.length === 1 ? "" : "s"} over ${fmtTime(end)} time units. ` +
-      runs.map((r) => `${ALGO_LABELS[r.algo]}: average waiting ${fmt(r.metrics.waiting)}`).join("; ")
+      runs.map((r) => `${r.label}: average waiting ${fmt(r.metrics.waiting)}`).join("; ")
   );
 }
 
+let hatchFill = "#eef0f3";
 export function hatch(x0, y0, w, h, color) {
   ctx.save();
   ctx.beginPath();
   ctx.rect(x0, y0, w, h);
   ctx.clip();
-  ctx.fillStyle = "#eef0f3";
+  ctx.fillStyle = hatchFill;
   ctx.fillRect(x0, y0, w, h);
   ctx.strokeStyle = color;
   ctx.lineWidth = 1.5;
@@ -272,7 +279,7 @@ export function revealChart() {
 
 export function timeAt(e) {
   const g = state.geom;
-  return ((e.clientX - canvas.getBoundingClientRect().left - g.left) / g.plotW) * g.end;
+  return g.v0 + ((e.clientX - canvas.getBoundingClientRect().left - g.left) / g.plotW) * (g.v1 - g.v0);
 }
 
 export function runAt(e) {
@@ -326,13 +333,70 @@ canvas.addEventListener("keydown", (e) => {
     End: state.geom.end,
     Escape: null,
   }[e.key];
+  if (e.key === "+" || e.key === "=") return void zoomBy(0.5, state.clock ?? undefined);
+  if (e.key === "-") return void zoomBy(2, state.clock ?? undefined);
   if (next === undefined) return;
   e.preventDefault();
   setClock(next === null ? null : Math.min(state.geom.end, Math.max(0, next)));
 });
 
+/* ---------------- Zoom and pan ---------------- */
+
+const MIN_SPAN = 4;
+
+// Keep the window inside the run; a window as wide as the run means "fit".
+export function setView(a, b) {
+  const end = timelineEnd();
+  const span = Math.min(end, Math.max(Math.min(MIN_SPAN, end), b - a));
+  const v0 = Math.min(Math.max(0, a), end - span);
+  state.view = span >= end ? null : [v0, v0 + span];
+  const zoomed = !!state.view;
+  $("panRange").hidden = !zoomed;
+  $("zoomFit").disabled = !zoomed;
+  $("panRange").value = zoomed ? Math.round((v0 / (end - span)) * 1000) : 0;
+  queueDraw();
+}
+
+export function zoomBy(factor, centre) {
+  const g = state.geom;
+  if (!g) return;
+  const c = centre ?? (g.v0 + g.v1) / 2;
+  const f = (c - g.v0) / (g.v1 - g.v0);
+  const span = (g.v1 - g.v0) * factor;
+  setView(c - f * span, c + (1 - f) * span);
+}
+
+$("zoomIn").addEventListener("click", () => zoomBy(0.5));
+$("zoomOut").addEventListener("click", () => zoomBy(2));
+$("zoomFit").addEventListener("click", () => setView(0, timelineEnd()));
+$("panRange").addEventListener("input", (e) => {
+  const g = state.geom;
+  if (!g) return;
+  const span = g.v1 - g.v0;
+  setView((e.target.value / 1000) * (g.end - span), (e.target.value / 1000) * (g.end - span) + span);
+});
+
+// Ctrl/Cmd + wheel zooms around the pointer; Shift + wheel or a sideways wheel pans. Plain wheel still scrolls the page.
+canvas.addEventListener("wheel", (e) => {
+  const g = state.geom;
+  if (!g) return;
+  if (e.ctrlKey || e.metaKey) {
+    e.preventDefault();
+    zoomBy(e.deltaY > 0 ? 1.25 : 0.8, timeAt(e));
+  } else if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+    e.preventDefault();
+    const dt = ((e.deltaX || e.deltaY) / g.plotW) * (g.v1 - g.v0);
+    setView(g.v0 + dt, g.v1 + dt);
+  }
+}, { passive: false });
+
 export function setClock(t) {
   state.clock = t;
+  // Follow the clock while zoomed (Play, Step, arrow keys).
+  if (t !== null && state.view && (t < state.view[0] || t > state.view[1])) {
+    const span = state.view[1] - state.view[0];
+    setView(t - span / 2, t + span / 2);
+  }
   renderReadout();
   renderStep();
   queueDraw();
@@ -355,7 +419,7 @@ export function renderReadout(info = null) {
   if (info) {
     const r = info.run.data.results.find((p) => p.pid === info.seg.pid);
     el.innerHTML =
-      `<b>${esc(info.seg.pid)}</b> on ${ALGO_LABELS[info.run.algo]}: runs ${fmtTime(info.seg.start)}–${fmtTime(info.seg.end)}` +
+      `<b>${esc(info.seg.pid)}</b> on ${esc(info.run.label)}: runs ${fmtTime(info.seg.start)}–${fmtTime(info.seg.end)}` +
       (r ? `, arrived ${fmtTime(r.arrival)}, done at ${fmtTime(r.completion)}, waited ${fmtTime(r.waiting)}` : "");
     return;
   }
@@ -369,7 +433,7 @@ export function renderReadout(info = null) {
     const done = !s && t >= (r.data.segments.at(-1)?.end ?? 0);
     const what =
       done ? "done" : !s || s.pid === "IDLE" ? "idle" : s.pid === "CS" ? "switching" : s.pid === "MIGRATION" ? "migrating" : `<b>${esc(s.pid)}</b>`;
-    return `${ALGO_LABELS[r.algo]} ${what}`;
+    return `${esc(r.label)} ${what}`;
   });
   el.innerHTML = `<span class="now">t = ${fmtTime(t)}</span> · ${parts.join(" · ")}`;
 }

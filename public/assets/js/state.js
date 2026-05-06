@@ -24,7 +24,8 @@ export const SPECIAL = { IDLE: true, CS: true, MIGRATION: true, NUMA: true };
 export const state = {
   processes: [],
   vms: [],
-  runs: [], // [{ algo, data, metrics }]
+  runs: [], // [{ algo (unique id), base, label, data, metrics }]
+  pins: [], // [{ id, base, params, label }]: algorithm + settings kept as their own tracks
   hv: false,
   selected: null,
   clock: null,
@@ -33,6 +34,7 @@ export const state = {
   hasRun: false,
   progress: 1,
   geom: null,
+  view: null, // zoomed time window [start, end]; null shows the whole run
 };
 
 

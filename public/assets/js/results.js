@@ -1,5 +1,6 @@
+import { renderAlt } from "./alt.js";
 import { drawChart, renderReadout, setHover } from "./chart.js";
-import { $, ALGO_LABELS, colorFor, esc, fmt, fmtTime, paint, state } from "./state.js";
+import { $, colorFor, esc, fmt, fmtTime, paint, state } from "./state.js";
 import { renderStep } from "./stepper.js";
 
 /* ---------------- Results ---------------- */
@@ -13,6 +14,7 @@ export function renderResults() {
   renderDetail();
   renderReadout();
   renderStep();
+  renderAlt();
   drawChart();
 }
 
@@ -45,7 +47,7 @@ export function renderLeague() {
         return `<td class="${cls}">${fmt(v, c.digits)}${c.suffix || ""}${isBest ? '<span class="visually-hidden"> (best)</span>' : ""}</td>`;
       }).join("");
       return `<tr data-algo="${r.algo}" tabindex="0" aria-selected="${r.algo === state.selected}">
-        <td>${ALGO_LABELS[r.algo]}</td>${cells}</tr>`;
+        <td>${esc(r.label)}</td>${cells}</tr>`;
     })
     .join("");
 
@@ -94,7 +96,7 @@ export function renderDetail() {
   tabsEl.innerHTML = state.runs
     .map(
       (r) =>
-        `<button type="button" role="tab" data-algo="${r.algo}" aria-selected="${r.algo === state.selected}" tabindex="${r.algo === state.selected ? 0 : -1}">${ALGO_LABELS[r.algo]}</button>`
+        `<button type="button" role="tab" data-algo="${r.algo}" aria-selected="${r.algo === state.selected}" tabindex="${r.algo === state.selected ? 0 : -1}">${esc(r.label)}</button>`
     )
     .join("");
   tabsEl.querySelectorAll("button").forEach((b) => {

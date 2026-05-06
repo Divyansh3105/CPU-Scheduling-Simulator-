@@ -1,7 +1,8 @@
 import { runSchedule } from "./api.js";
 import { revealChart } from "./chart.js";
 import { renderResults } from "./results.js";
-import { $, showNotification, state } from "./state.js";
+import { currentParams } from "./pins.js";
+import { $, ALGO_LABELS, showNotification, state } from "./state.js";
 
 let runSeq = 0;
 
@@ -13,14 +14,11 @@ export function selectedAlgorithms() {
   return [...document.querySelectorAll("#algoChips input:checked")].map((i) => i.value);
 }
 
-export function buildPayload(algo, hv) {
+export function buildPayload(algo, hv, params = currentParams()) {
   const processes = state.processes.map(({ pid, arrival, burst, priority, ioTime, ioAt, memReq, vm }) => ({
     pid, arrival, burst, priority, ioTime, ioAt, memReq, vm,
   }));
-  const quantum = parseInt($("quantum").value, 10) || 2;
-  const csOverhead = parseFloat($("contextSwitchOverhead").value) || 0;
-  const aging = parseInt($("priorityAging").value, 10) || 0;
-  const mlfqBoost = parseInt($("mlfqBoost").value, 10) || 0;
+  const { quantum, aging, mlfqBoost, csOverhead } = params;
   if (!hv) return { algorithm: algo, quantum, aging, mlfqBoost, processes, csOverhead };
   return {
     processAlgo: algo,
@@ -47,7 +45,7 @@ export async function runSimulation() {
     showNotification("Add at least one process, or load a preset.", "error");
     return;
   }
-  if (!algos.length) {
+  if (!algos.length && !state.pins.length) {
     showNotification("Pick at least one algorithm to compare.", "error");
     return;
   }
@@ -65,8 +63,13 @@ export async function runSimulation() {
   btn.disabled = true;
   btn.setAttribute("aria-busy", "true");
 
+  // Plain algorithms follow the live settings; pinned ones carry the settings they were pinned with.
+  const jobs = [
+    ...algos.map((a) => ({ id: a, base: a, label: ALGO_LABELS[a], params: undefined })),
+    ...state.pins.map((p) => ({ id: p.id, base: p.base, label: p.label, params: p.params })),
+  ];
   const settled = await Promise.allSettled(
-    algos.map((algo) => Promise.resolve().then(() => runSchedule(hv, buildPayload(algo, hv))))
+    jobs.map((j) => Promise.resolve().then(() => runSchedule(hv, buildPayload(j.base, hv, j.params))))
   );
   if (seq !== runSeq) return; // a newer run superseded this one
   btn.disabled = false;
@@ -76,7 +79,7 @@ export async function runSimulation() {
   if (failed) showNotification(failed.reason.message, "error");
 
   const runs = settled
-    .map((r, i) => (r.status === "fulfilled" ? { algo: algos[i], data: r.value, metrics: metricsOf(r.value) } : null))
+    .map((r, i) => (r.status === "fulfilled" ? { algo: jobs[i].id, base: jobs[i].base, label: jobs[i].label, data: r.value, metrics: metricsOf(r.value) } : null))
     .filter(Boolean);
   if (!runs.length) return;
 
@@ -85,6 +88,7 @@ export async function runSimulation() {
   state.hasRun = true;
   state.stale = false;
   state.hoverPid = null;
+  state.view = null;
   if (!runs.some((r) => r.algo === state.selected)) state.selected = runs[0].algo;
   if (state.clock !== null && state.clock > timelineEnd()) state.clock = null;
 
