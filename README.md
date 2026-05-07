@@ -23,6 +23,12 @@ Built with plain HTML, CSS and vanilla JavaScript. The scheduler runs in the bro
   - VM schedulers: round robin, priority, proportional share, credit, lottery (seeded, so reproducible).
   - Optional live migration, memory overcommit, I/O blocking, a CPU cache model, and a NUMA penalty; each changes the timeline.
   - Any process algorithm works inside a VM, including MLFQ with per-process levels.
+- **Step-through:** Play or Step moves the clock; the panel gives each algorithm's reason for its latest dispatch and who is ready.
+- **Pinned runs:** "Pin with these settings" keeps an algorithm with its quantum, aging, boost and context-switch cost as its own track (for example `RR q=2` next to `RR q=4`).
+- **Zoom and pan** for long runs: buttons, Ctrl + wheel, Shift + wheel, a pan slider, and `+` / `-` on the chart. The clock is followed while you play.
+- **Save and share:** the workload and settings go into a share link (URL hash), are remembered in the browser, and export or import as JSON; processes also export or import as CSV (`pid,arrival,burst,priority,ioTime,ioAt,memReq,vm`, with `ioAt` points separated by `;`). Save the chart as PNG. Imported data goes through the same validation as the engine.
+- **Themes:** light, dark and high contrast (the choice is remembered). Process rows can be edited in place.
+- **Accessible alternative:** "Timetable as a table" lists every track as plain text for screen readers.
 - **Presets** for processes and VMs, and an optional "add a random process every 5 s" generator.
 
 ## Run it
