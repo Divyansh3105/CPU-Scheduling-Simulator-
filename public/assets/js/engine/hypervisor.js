@@ -115,7 +115,7 @@ function schedule(vms, processes, processAlgo, processQuantum, vmScheduler, vmQu
   const vmOf = (name) => vms.get(name);
 
   // Memory ballooning: when overcommitted, every VM is squeezed proportionally into physical memory.
-  const effectiveMemory = {};
+  const effectiveMemory = Object.create(null);
   let allocated = 0;
   for (const [name, v] of vms) {
     effectiveMemory[name] = v.memory;
@@ -125,12 +125,12 @@ function schedule(vms, processes, processAlgo, processQuantum, vmScheduler, vmQu
     for (const name of vmNames) effectiveMemory[name] = Math.floor((effectiveMemory[name] * TOTAL_SYSTEM_MEMORY) / allocated);
   }
 
-  const proc = {};
+  const proc = Object.create(null);
   for (const p of processes) proc[p.pid] = { ...p };
 
-  const stats = {};
-  const credits = {};
-  const node = {};
+  const stats = Object.create(null);
+  const credits = Object.create(null);
+  const node = Object.create(null);
   vmNames.forEach((name, i) => {
     node[name] = i % 2;
     stats[name] = {
@@ -141,21 +141,21 @@ function schedule(vms, processes, processAlgo, processQuantum, vmScheduler, vmQu
     credits[name] = vmOf(name).cpuShare;
   });
 
-  const queues = {};
+  const queues = Object.create(null);
   for (const name of vmNames) queues[name] = [];
-  const current = {};
+  const current = Object.create(null);
   const blocked = new Map(); // pid -> time its I/O completes
-  const ioIdx = {};
+  const ioIdx = Object.create(null);
   const ioQueue = [];
   let ioSeq = 0;
   let deviceFree = 0;
   const ioSchedule = [];
-  const level = {};
+  const level = Object.create(null);
   for (const p of processes) level[p.pid] = 0;
   let nextBoost = mlfqBoost > 0 ? mlfqBoost : Infinity;
   let lastVM = null;
   const migrations = [];
-  const ranOn = {};
+  const ranOn = Object.create(null);
   let rrPos = -1;
   const n = processes.length;
   let idx = 0;

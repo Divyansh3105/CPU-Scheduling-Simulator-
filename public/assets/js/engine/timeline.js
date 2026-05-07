@@ -9,10 +9,11 @@ export class Timeline {
     this.segments = [];
     this.decisions = [];
     this.decisionsTruncated = false;
-    this.rem = {};
-    this.first = {};
-    this.finish = {};
-    this.switches = {};
+    // No prototype: a process named "constructor" or "toString" must not find inherited members.
+    this.rem = Object.create(null);
+    this.first = Object.create(null);
+    this.finish = Object.create(null);
+    this.switches = Object.create(null);
     this.last = null;
     for (const p of procs) {
       this.rem[p.pid] = p.burst;

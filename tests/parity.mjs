@@ -75,6 +75,13 @@ compare("no processes", "simulate.php", { processes: [] }, simulate);
 const P = (pid, burst = 2, extra = {}) => ({ pid, arrival: 0, burst, ...extra });
 compare("__proto__ pid", "simulate.php", { processes: [P("__proto__")] }, simulate);
 compare("__proto__ vm", "simulate_hypervisor.php", { processes: [P("X", 2, { vm: "__proto__" })], vms: [{ name: "__proto__" }] }, simulateHypervisor);
+// Names that exist on every plain JS object must behave like any other name.
+for (const n of ["constructor", "toString", "valueOf", "hasOwnProperty", "isPrototypeOf"]) {
+  const ps = [P(n, 3, { ioTime: 1 }), P("B", 2, { arrival: 1 })];
+  for (const algorithm of ["FCFS", "SRTF", "RR", "MLFQ"]) compare(`pid ${n} ${algorithm}`, "simulate.php", { algorithm, processes: ps }, simulate);
+  compare(`vm ${n}`, "simulate_hypervisor.php", { processes: [P("A", 4, { vm: n })], vms: [{ name: n }], enableIOScheduling: true }, simulateHypervisor);
+  compare(`vm+pid ${n}`, "simulate_hypervisor.php", { processes: [P(n, 4, { vm: n, ioTime: 2 })], vms: [{ name: n }], enableIOScheduling: true, enableCaching: true }, simulateHypervisor);
+}
 compare("hex number", "simulate.php", { processes: [{ pid: "X", arrival: 0, burst: "0x1A" }] }, simulate);
 compare("total burst cap", "simulate.php", { processes: Array.from({ length: 21 }, (_, i) => P("P" + i, 1000)) }, simulate);
 const big = Array.from({ length: 20 }, (_, i) => P("P" + i, 1000, { vm: i % 2 ? "A" : "B", ioTime: 3 }));

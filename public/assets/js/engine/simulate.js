@@ -69,7 +69,7 @@ function runSrtf(procs, overhead) {
 // resets whenever it runs.
 function runPriorityPreemptive(procs, overhead, aging) {
   const tl = new Timeline(procs, overhead);
-  const readySince = {};
+  const readySince = Object.create(null);
   for (const p of procs) readySince[p.pid] = p.arrival;
   let left = procs.length;
   let last = null;
