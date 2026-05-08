@@ -157,7 +157,7 @@ export function renderHvDetail(run) {
   let html = `<div class="hv-block">
     <h3>Virtual machines</h3>
     <ul class="feature-list" aria-label="Hypervisor features">${features}</ul>
-    <div class="table-scroll"><table class="data">
+    <div class="table-scroll" data-lenis-prevent><table class="data">
       <thead><tr>
         <th scope="col">VM</th><th scope="col" class="num">CPU time</th><th scope="col">Utilisation</th>
         <th scope="col" class="num">Idle</th><th scope="col" class="num">Processes</th><th scope="col" class="num">Migrations</th>
@@ -185,7 +185,7 @@ export function renderHvDetail(run) {
   </div>`;
 
   if (d.migrations && d.migrations.length) {
-    html += `<div class="hv-block"><h3>Migrations</h3><div class="table-scroll"><table class="data">
+    html += `<div class="hv-block"><h3>Migrations</h3><div class="table-scroll" data-lenis-prevent><table class="data">
       <thead><tr><th scope="col">Process</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="num">At</th><th scope="col" class="num">Penalty</th></tr></thead>
       <tbody>${d.migrations
         .map(
@@ -204,7 +204,7 @@ export function renderHvDetail(run) {
   if (d.ioSchedule && d.ioSchedule.length) {
     html += `<div class="hv-block"><h3>I/O operations</h3>
       <p class="readout">A process blocks at each of its I/O points (halfway through the burst unless set). One device serves requests; when it frees up it takes the waiting request with the best priority number.</p>
-      <div class="table-scroll"><table class="data">
+      <div class="table-scroll" data-lenis-prevent><table class="data">
       <thead><tr><th scope="col">Process</th><th scope="col">VM</th><th scope="col" class="num">Requested</th><th scope="col" class="num">Started</th><th scope="col" class="num">Waited</th><th scope="col" class="num">Duration</th><th scope="col" class="num">Priority</th></tr></thead>
       <tbody>${d.ioSchedule
         .map(

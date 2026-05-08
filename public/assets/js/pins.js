@@ -22,15 +22,13 @@ function pinLabel(base, p) {
   return `${SHORT[base]} ${bits.join(" ")}`;
 }
 
+// Returns "added", "duplicate" or "full"; the caller decides what to tell the user.
 export function addPin(base, params) {
   const label = pinLabel(base, params);
-  if (state.pins.some((p) => p.label === label)) return false;
-  if (state.pins.length >= MAX_PINS) {
-    showNotification(`At most ${MAX_PINS} pinned runs.`, "error");
-    return false;
-  }
+  if (state.pins.some((p) => p.label === label)) return "duplicate";
+  if (state.pins.length >= MAX_PINS) return "full";
   state.pins.push({ id: `pin${++pinSeq}`, base, params, label });
-  return true;
+  return "added";
 }
 
 export function renderPins() {
@@ -50,7 +48,9 @@ $("pinBtn").addEventListener("click", () => {
   const params = currentParams();
   const algos = [...document.querySelectorAll("#algoChips input:checked")].map((i) => i.value);
   if (!algos.length) return showNotification("Check an algorithm to pin.", "error");
-  if (!algos.map((a) => addPin(a, params)).some(Boolean)) return showNotification("Already pinned with these settings.", "info");
+  const results = algos.map((a) => addPin(a, params));
+  if (results.includes("full")) showNotification(`At most ${MAX_PINS} pinned runs.`, "error");
+  if (!results.includes("added")) return results.includes("full") ? undefined : showNotification("Already pinned with these settings.", "info");
   renderPins();
   settingsChanged();
 });

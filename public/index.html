@@ -122,7 +122,7 @@
                     <span class="auto-status" id="autoProcessStatus" hidden>next in <b id="countdown">5</b> s</span>
                 </div>
 
-                <div class="table-scroll">
+                <div class="table-scroll" data-lenis-prevent>
                     <table class="data" id="processTable">
                         <caption class="visually-hidden">Processes in the workload</caption>
                         <thead>
@@ -187,7 +187,7 @@
 
                 <p class="note">VMs only take effect in hypervisor mode. Removing a VM moves its processes to the host.</p>
 
-                <div class="table-scroll">
+                <div class="table-scroll" data-lenis-prevent>
                     <table class="data" id="vmTable">
                         <caption class="visually-hidden">Virtual machines</caption>
                         <thead>
@@ -280,7 +280,7 @@
                     <p class="readout" id="clockReadout" aria-live="polite">Add processes, pick algorithms, then run.</p>
                 </div>
                 <div class="chart-wrap" id="chartWrap">
-                    <canvas id="timetable" tabindex="0" role="img" aria-describedby="altBox" aria-label="Timetable chart. Run a schedule to draw it."></canvas>
+                    <canvas id="timetable" data-lenis-prevent tabindex="0" role="img" aria-describedby="altBox" aria-label="Timetable chart. Run a schedule to draw it."></canvas>
                     <div class="chart-empty" id="chartEmpty">
                         <p>No timetable yet</p>
                         <span>Load a preset workload on the left and press <b>Run timetable</b>. Each algorithm gets its own track on one shared clock.</span>
@@ -311,10 +311,10 @@
                         <label for="altTrack">Track</label>
                         <select id="altTrack"></select>
                     </div>
-                    <div class="table-scroll alt-scroll" id="altData" tabindex="0" role="region" aria-label="Timetable data"></div>
+                    <div class="table-scroll alt-scroll" id="altData" data-lenis-prevent tabindex="0" role="region" aria-label="Timetable data"></div>
                 </details>
                 <div class="chart-foot">
-                    <div class="legend" id="legend"></div>
+                    <div class="legend" id="legend" data-lenis-prevent></div>
                     <p class="chart-help">Drag or use arrow keys on the chart to move the clock. Hover a train to follow it across tracks.</p>
                 </div>
                 <div class="stepper" id="stepper" hidden>
@@ -328,7 +328,8 @@
                             <svg class="icon" aria-hidden="true"><use href="#i-step"/></svg><span>Step</span>
                         </button>
                     </div>
-                    <div class="step-panel" id="stepPanel" aria-live="polite"></div>
+                    <div class="step-panel" id="stepPanel"></div>
+                    <div class="visually-hidden" id="stepAnnounce" aria-live="polite"></div>
                 </div>
             </section>
 
@@ -337,7 +338,7 @@
                     <h2 id="league-title">Comparison</h2>
                     <p class="readout">Averages per algorithm. Best in each column is marked. Select a row for its details.</p>
                 </div>
-                <div class="table-scroll">
+                <div class="table-scroll" data-lenis-prevent>
                     <table class="data league-table" id="leagueTable">
                         <thead>
                             <tr>
@@ -361,7 +362,7 @@
                     <h2 id="detail-title">Per-process results</h2>
                     <div class="segmented" role="tablist" aria-label="Algorithm" id="detailTabs"></div>
                 </div>
-                <div class="table-scroll">
+                <div class="table-scroll" data-lenis-prevent>
                     <table class="data" id="resultTable">
                         <thead>
                             <tr>

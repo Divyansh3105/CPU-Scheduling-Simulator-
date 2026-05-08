@@ -350,11 +350,24 @@ export function setView(a, b) {
   const span = Math.min(end, Math.max(Math.min(MIN_SPAN, end), b - a));
   const v0 = Math.min(Math.max(0, a), end - span);
   state.view = span >= end ? null : [v0, v0 + span];
+  syncZoomUi();
+  queueDraw();
+}
+
+function syncZoomUi() {
   const zoomed = !!state.view;
   $("panRange").hidden = !zoomed;
   $("zoomFit").disabled = !zoomed;
-  $("panRange").value = zoomed ? Math.round((v0 / (end - span)) * 1000) : 0;
-  queueDraw();
+  if (zoomed) {
+    const span = state.view[1] - state.view[0];
+    $("panRange").value = Math.round((state.view[0] / (timelineEnd() - span)) * 1000);
+  }
+}
+
+// A new run starts fully zoomed out.
+export function resetView() {
+  state.view = null;
+  syncZoomUi();
 }
 
 export function zoomBy(factor, centre) {

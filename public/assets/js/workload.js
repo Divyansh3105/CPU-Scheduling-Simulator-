@@ -145,6 +145,9 @@ function editCell(input) {
   }
   p[input.dataset.field] = value;
   if (input.dataset.field === "burst") p.ioAt = (p.ioAt ?? []).filter((n) => n < value);
+  const ioCell = input.closest("tr").querySelector('input[data-field="ioTime"]').closest("td");
+  ioCell.querySelector(".hint")?.remove();
+  if (p.ioTime && p.ioAt?.length) ioCell.insertAdjacentHTML("beforeend", `<span class="hint"> @${esc(p.ioAt.join(","))}</span>`);
   markStale();
 }
 

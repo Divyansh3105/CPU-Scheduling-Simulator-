@@ -81,8 +81,13 @@ $("stepPlay").addEventListener("click", () => {
     setClock(Math.min(state.geom.end, state.clock + 0.5));
   }, 120);
 });
-$("stepNext").addEventListener("click", () => { stopPlay(); stepClock(1); });
-$("stepBack").addEventListener("click", () => { stopPlay(); stepClock(-1); });
+$("stepNext").addEventListener("click", () => { stopPlay(); stepClock(1); announce(); });
+$("stepBack").addEventListener("click", () => { stopPlay(); stepClock(-1); announce(); });
+
+// Only Step and Back are announced; dragging or playing would repeat the panel on every tick.
+function announce() {
+  $("stepAnnounce").textContent = $("stepPanel").innerText.replace(/\s*\n+\s*/g, ". ");
+}
 
 export let resizeTimer = null;
 window.addEventListener("resize", () => {

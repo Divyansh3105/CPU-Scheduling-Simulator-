@@ -1,5 +1,5 @@
 import { runSchedule } from "./api.js";
-import { revealChart } from "./chart.js";
+import { resetView, revealChart } from "./chart.js";
 import { renderResults } from "./results.js";
 import { currentParams } from "./pins.js";
 import { $, ALGO_LABELS, showNotification, state } from "./state.js";
@@ -88,7 +88,7 @@ export async function runSimulation() {
   state.hasRun = true;
   state.stale = false;
   state.hoverPid = null;
-  state.view = null;
+  resetView();
   if (!runs.some((r) => r.algo === state.selected)) state.selected = runs[0].algo;
   if (state.clock !== null && state.clock > timelineEnd()) state.clock = null;
 

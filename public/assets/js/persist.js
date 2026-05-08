@@ -35,20 +35,20 @@ function snapshot() {
 
 // Throws Error with a readable message when the data is not a valid workload.
 function apply(data) {
+  // Everything is checked and cleaned first; from here on nothing can throw, so a bad file changes nothing.
   const processes = validateProcesses(data?.processes);
   const vms = [...validateVms(data.vms ?? [], processes).values()].filter((v) => v.name !== "Host");
+  const pins = (Array.isArray(data.pins) ? data.pins : [])
+    .filter((p) => ALGOS.includes(p?.base))
+    .map((p) => ({ base: p.base, params: { quantum: num(p.params?.quantum, 1, 1000, 2), aging: num(p.params?.aging, 0, 1000, 0), mlfqBoost: num(p.params?.mlfqBoost, 0, 10000, 0), csOverhead: half(p.params?.csOverhead, 0) } }));
+  const s = data.settings && typeof data.settings === "object" ? { ...data.settings, algos: Array.isArray(data.settings.algos) ? data.settings.algos : [] } : null;
   resetColors();
   state.processes = processes;
   state.vms = vms;
   state.pins = [];
-  for (const p of data.pins ?? []) {
-    if (!ALGOS.includes(p?.base)) continue;
-    const q = p.params ?? {};
-    addPin(p.base, { quantum: num(q.quantum, 1, 1000, 2), aging: num(q.aging, 0, 1000, 0), mlfqBoost: num(q.mlfqBoost, 0, 10000, 0), csOverhead: half(q.csOverhead, 0) });
-  }
-  const s = data.settings;
+  for (const p of pins) addPin(p.base, p.params);
   if (s) {
-    document.querySelectorAll("#algoChips input").forEach((i) => (i.checked = (s.algos ?? []).includes(i.value)));
+    document.querySelectorAll("#algoChips input").forEach((i) => (i.checked = s.algos.includes(i.value)));
     $("quantum").value = num(s.quantum, 1, 1000, 2);
     $("priorityAging").value = num(s.aging, 0, 1000, 0);
     $("mlfqBoost").value = num(s.mlfqBoost, 0, 10000, 0);
@@ -142,7 +142,9 @@ $("exportCsvBtn").addEventListener("click", () => {
 
 // CSV carries the process table only; names cannot contain commas, so a plain split is enough.
 function parseCsv(text) {
-  const [head, ...lines] = text.trim().split(/\r?\n/).map((l) => l.split(",").map((c) => c.trim()));
+  const rows = text.trim().split(/\r?\n/);
+  if (!rows[0].includes(",") && /[;\t]/.test(rows[0])) throw new Error("columns must be separated by commas (this file uses semicolons or tabs)");
+  const [head, ...lines] = rows.map((l) => l.split(",").map((c) => c.trim()));
   const col = Object.fromEntries(head.map((h, i) => [h.toLowerCase(), i]));
   for (const need of ["pid", "arrival", "burst"]) if (!(need in col)) throw new Error(`CSV needs a "${need}" column`);
   return lines.filter((l) => l.some(Boolean)).map((l) => {

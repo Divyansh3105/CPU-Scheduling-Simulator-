@@ -5,8 +5,13 @@ import { $, esc, fmtTime, state } from "./state.js";
 const ROW_CAP = 1000;
 const NAMES = { IDLE: "Idle", CS: "Context switch", MIGRATION: "Migration", NUMA: "NUMA hop" };
 let showAll = false;
+let shownRuns = null;
 
 export function renderAlt() {
+  if (shownRuns !== state.runs) {
+    shownRuns = state.runs;
+    showAll = false;
+  }
   const box = $("altData");
   $("altBox").hidden = !state.runs.length;
   if (!state.runs.length || !$("altBox").open) return;
