@@ -168,10 +168,17 @@ export function drawChart() {
 
     const top = mid - G.bar / 2;
     ctx.font = `700 12px ${COND}`;
+    let lastPx = -Infinity; // 40k segments on a 1000 px track: draw one sliver per pixel column, not all of them
     r.data.segments.forEach((s) => {
       if (s.pid === "IDLE" || s.end < v0 || s.start > v1) return;
       const sx = x(s.start);
-      const sw = Math.max(1, x(s.end) - sx);
+      const real = x(s.end) - sx;
+      if (real < 1) {
+        const px = Math.floor(sx);
+        if (px === lastPx) return;
+        lastPx = px;
+      }
+      const sw = Math.max(1, real);
       if (SPECIAL[s.pid]) {
         hatch(sx, top + 4, sw, G.bar - 8, { CS: "#8a929e", MIGRATION: signal, NUMA: "#8a5400" }[s.pid]);
         return;
@@ -182,7 +189,7 @@ export function drawChart() {
       ctx.fillStyle = paper;
       ctx.fillRect(sx + sw - 1, top, 1, G.bar); // hairline between consecutive trains
       const label = String(s.pid);
-      if (ctx.measureText(label).width + 8 < sw) {
+      if (sw > 14 && ctx.measureText(label).width + 8 < sw) {
         ctx.textAlign = "center";
         ctx.fillText(label, sx + sw / 2, mid + 0.5);
       }
