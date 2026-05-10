@@ -110,3 +110,114 @@ test("every track has a text table", async ({ page }) => {
   await page.selectOption("#altTrack", { index: 1 });
   await expect(page.locator("#altData caption")).toContainText("SJF");
 });
+
+const bigWorkload = (page) =>
+  page.setInputFiles("#importFile", {
+    name: "big.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({ processes: Array.from({ length: 100 }, (_, i) => ({ pid: "P" + i, arrival: Math.floor(i / 2), burst: 2 + (i % 7) })) })),
+  });
+
+test("the wheel scrolls the text table and the legend, not the page", async ({ page }) => {
+  await bigWorkload(page);
+  await run(page);
+  await page.locator("#altBox summary").click();
+  for (const sel of ["#altData", "#legend"]) {
+    const el = page.locator(sel);
+    await el.scrollIntoViewIfNeeded();
+    await page.waitForTimeout(400);
+    const box = await el.boundingBox();
+    await page.mouse.move(box.x + 40, box.y + 30);
+    await page.mouse.wheel(0, 120);
+    await expect.poll(() => el.evaluate((e) => e.scrollTop), { message: sel }).toBeGreaterThan(0);
+  }
+});
+
+test("shift + wheel pans the chart without scrolling the page", async ({ page }) => {
+  await bigWorkload(page);
+  await run(page);
+  await page.click("#zoomIn");
+  await page.click("#zoomIn");
+  await page.locator("#timetable").scrollIntoViewIfNeeded();
+  await page.waitForTimeout(400);
+  const box = await page.locator("#timetable").boundingBox();
+  const before = { y: await page.evaluate(() => scrollY), pan: await page.locator("#panRange").inputValue() };
+  await page.mouse.move(box.x + 400, box.y + 120);
+  await page.keyboard.down("Shift");
+  await page.mouse.wheel(0, 200);
+  await page.keyboard.up("Shift");
+  await page.waitForTimeout(600);
+  expect(await page.locator("#panRange").inputValue()).not.toBe(before.pan);
+  expect(await page.evaluate(() => scrollY)).toBe(before.y);
+});
+
+test("a new run resets the zoom controls", async ({ page }) => {
+  await run(page);
+  await page.click("#zoomIn");
+  await page.click("#runBtn");
+  await expect(page.locator("#panRange")).toBeHidden();
+  await expect(page.locator("#zoomFit")).toBeDisabled();
+});
+
+test("the text table starts capped again after a new run", async ({ page }) => {
+  await page.setInputFiles("#importFile", {
+    name: "long.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({ processes: Array.from({ length: 100 }, (_, i) => ({ pid: "P" + i, arrival: 0, burst: 20 })) })),
+  });
+  await page.locator("#algoChips input").evaluateAll((els) => els.forEach((e) => (e.checked = e.value === "RR")));
+  await page.fill("#quantum", "1");
+  await page.locator("#quantum").dispatchEvent("change");
+  await run(page);
+  await page.locator("#altBox summary").click();
+  await page.click("#altMore");
+  const all = await page.locator("#altData tbody tr").count();
+  expect(all).toBeGreaterThan(1000);
+  await page.click("#runBtn");
+  await expect(page.locator("#altData tbody tr")).toHaveCount(1000);
+});
+
+test("a semicolon CSV gets a clear message and changes nothing", async ({ page }) => {
+  await page.setInputFiles("#importFile", { name: "semi.csv", mimeType: "text/csv", buffer: Buffer.from("pid;arrival;burst\nA;0;3\n") });
+  await expect(page.locator(".toast.error")).toContainText("separated by commas");
+  await expect(page.locator("#processTable tbody tr")).toHaveCount(4);
+});
+
+test("a bad settings block leaves the workload untouched", async ({ page }) => {
+  const bad = { processes: [{ pid: "Z", arrival: 0, burst: 2 }], settings: { algos: 5, features: "x" } };
+  await page.setInputFiles("#importFile", { name: "bad.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(bad)) });
+  await expect(page.locator("#processTable tbody tr")).toHaveCount(1); // the process list is valid, the odd settings are ignored
+  await expect(page.locator(".toast.error")).toHaveCount(0);
+});
+
+test("pinning at the limit shows one message", async ({ page }) => {
+  await page.locator("#algoChips input").evaluateAll((els) => els.forEach((e) => (e.checked = true)));
+  await page.click("#pinBtn"); // 7 algorithms, 6 fit
+  await expect(page.locator(".toast.error")).toHaveCount(1);
+});
+
+test("editing the burst keeps the I/O points hint current", async ({ page }) => {
+  await page.setInputFiles("#importFile", {
+    name: "io.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({ processes: [{ pid: "Q", arrival: 0, burst: 10, ioTime: 1, ioAt: [2, 5] }] })),
+  });
+  const row = page.locator("#processTable tbody tr", { hasText: "Q" });
+  await expect(row.locator(".hint")).toHaveText("@2,5");
+  const burst = row.locator('input[data-field="burst"]');
+  await burst.fill("4");
+  await burst.dispatchEvent("change");
+  await expect(row.locator(".hint")).toHaveText("@2"); // point 5 no longer fits inside a burst of 4
+});
+
+test("names that exist on every JS object work", async ({ page }) => {
+  await page.setInputFiles("#importFile", {
+    name: "names.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({ processes: [{ pid: "constructor", arrival: 0, burst: 3 }, { pid: "toString", arrival: 1, burst: 2 }] })),
+  });
+  await run(page);
+  await page.locator("#altBox summary").click();
+  await expect(page.locator("#resultTable tbody tr").first()).toContainText("constructor");
+  await expect(page.locator("#resultTable tbody tr td").nth(7)).not.toHaveText(/NaN|null/);
+});
