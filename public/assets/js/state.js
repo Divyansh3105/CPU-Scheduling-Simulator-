@@ -1,5 +1,5 @@
 // One definition, shared with the engine (and matching NAME_PATTERN / MAX_PROCESSES in src/bootstrap.php).
-export { MAX_PROCESSES, NAME_RE } from "./engine/validate.js";
+export { MAX_PROCESSES, MAX_TOTAL_BURST, NAME_RE } from "./engine/validate.js";
 
 
 export const ALGO_LABELS = {

@@ -93,6 +93,7 @@ const fromHash = (text) => {
 // Called once at startup: a shared link wins over the last saved workload.
 export function restore() {
   const hash = location.hash.match(/^#s=([A-Za-z0-9_-]{1,60000})$/);
+  if (!hash && location.hash.startsWith("#s=")) showNotification("That share link is damaged or too long to open.", "error");
   try {
     if (hash) {
       apply(fromHash(hash[1]));
@@ -110,7 +111,9 @@ export function restore() {
 window.addEventListener("hashchange", () => location.hash.startsWith("#s=") && restore());
 
 $("shareBtn").addEventListener("click", async () => {
-  const url = `${location.origin}${location.pathname}#s=${toHash(snapshot())}`;
+  const hash = toHash(snapshot());
+  if (hash.length > 60000) return showNotification("This workload is too large for a link. Use Export JSON instead.", "error");
+  const url = `${location.origin}${location.pathname}#s=${hash}`;
   history.replaceState(null, "", url);
   try {
     await navigator.clipboard.writeText(url);

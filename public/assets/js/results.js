@@ -96,7 +96,7 @@ export function renderDetail() {
   tabsEl.innerHTML = state.runs
     .map(
       (r) =>
-        `<button type="button" role="tab" data-algo="${r.algo}" aria-selected="${r.algo === state.selected}" tabindex="${r.algo === state.selected ? 0 : -1}">${esc(r.label)}</button>`
+        `<button type="button" role="tab" id="detailTab-${r.algo}" aria-controls="resultPanel" data-algo="${r.algo}" aria-selected="${r.algo === state.selected}" tabindex="${r.algo === state.selected ? 0 : -1}">${esc(r.label)}</button>`
     )
     .join("");
   tabsEl.querySelectorAll("button").forEach((b) => {
@@ -111,6 +111,7 @@ export function renderDetail() {
     });
   });
 
+  $("resultPanel").setAttribute("aria-labelledby", `detailTab-${run.algo}`);
   const tbody = document.querySelector("#resultTable tbody");
   tbody.innerHTML = run.data.results
     .map(

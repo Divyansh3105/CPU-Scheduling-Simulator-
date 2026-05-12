@@ -3,7 +3,7 @@ export const MAX_PROCESSES = 100;
 export const MAX_VMS = 20;
 const MAX_ARRIVAL = 10000;
 const MAX_BURST = 1000;
-const MAX_TOTAL_BURST = 20000; // keeps the schedule (and the page) fast
+export const MAX_TOTAL_BURST = 20000; // keeps the schedule (and the page) fast
 export const MAX_QUANTUM = 1000;
 // __proto__ is reserved: it would break the plain objects the engine keys by name.
 export const NAME_RE = /^(?!__proto__$)[A-Za-z0-9_.\- ]{1,32}$/;

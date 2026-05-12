@@ -24,10 +24,19 @@ export function reasonText(label, algo, d) {
   return `${who}.`;
 }
 
-// Processes that have arrived by t, are unfinished, and are not on the CPU.
+// Processes that have arrived by t, are unfinished, are not on the CPU and are not waiting on I/O.
 export function readyAt(run, t) {
   const on = segmentAt(run, t)?.pid;
-  return run.data.results.filter((p) => p.arrival <= t && p.completion > t && p.pid !== on).map((p) => p.pid);
+  const blocked = (pid) => (run.data.ioSchedule ?? []).some((io) => io.pid === pid && io.requestTime <= t && t < io.startTime + io.ioTime);
+  return run.data.results.filter((p) => p.arrival <= t && p.completion > t && p.pid !== on && !blocked(p.pid)).map((p) => p.pid);
+}
+
+// Hypervisor runs have no dispatch log, so say what the CPU is doing instead of "No dispatch yet".
+function nowRunning(run, t) {
+  const s = segmentAt(run, t);
+  if (!s || s.pid === "IDLE") return "The CPU is idle.";
+  const what = { CS: "context switch", MIGRATION: "migration", NUMA: "NUMA hop" }[s.pid];
+  return what ? `The CPU is in a ${what}.` : `<b>${esc(s.pid)}</b> is on the CPU${s.vm && s.vm !== "Host" ? ` (${esc(s.vm)})` : ""}.`;
 }
 
 export function renderStep() {
@@ -40,11 +49,12 @@ export function renderStep() {
       ? `<p class="step-hint">Press Play or Step to walk through the schedule one decision at a time.</p>`
       : state.runs
           .map((run) => {
-            const d = run.data.decisions?.filter((x) => x.time <= t).pop();
+            const logged = run.data.decisions?.length > 0;
+            const d = logged ? run.data.decisions.filter((x) => x.time <= t).pop() : null;
             const ready = readyAt(run, t);
             return (
               `<div class="step-row"><h4>${esc(run.label)}</h4>` +
-              `<p>${d ? reasonText(run.label, run.base, d) + ` <span class="step-at">(decided at t ${fmtTime(d.time)})</span>` : "No dispatch yet."}</p>` +
+              `<p>${logged ? (d ? reasonText(run.label, run.base, d) + ` <span class="step-at">(decided at t ${fmtTime(d.time)})</span>` : "No dispatch yet.") : nowRunning(run, t)}</p>` +
               `<p class="step-queue">Ready at t ${fmtTime(t)}: ${ready.length ? listOf(ready) : "nobody waiting"}</p></div>`
             );
           })
@@ -54,7 +64,9 @@ export function renderStep() {
 
 // Step jumps to the next (or previous) moment any track made a dispatch decision.
 export function stepClock(dir) {
-  const times = [...new Set(state.runs.flatMap((r) => (r.data.decisions || []).map((d) => d.time)))].sort((a, b) => a - b);
+  // Without a decision log (hypervisor mode) step between segment boundaries instead.
+  const moments = (r) => (r.data.decisions?.length ? r.data.decisions.map((d) => d.time) : r.data.segments.map((s) => s.start));
+  const times = [...new Set(state.runs.flatMap(moments))].sort((a, b) => a - b);
   const now = state.clock ?? -1;
   const next = dir > 0 ? times.find((x) => x > now) : times.filter((x) => x < now).pop();
   if (next === undefined) {

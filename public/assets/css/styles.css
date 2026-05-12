@@ -1448,10 +1448,11 @@ html[data-theme="contrast"] table.data th {
 }
 input.cell {
   width: 100%;
-  min-width: 0;
+  min-width: 38px; /* three digits (128, 256) must stay readable */
   max-width: 52px;
   min-height: 28px;
-  padding: 0 4px;
+  padding: 0 2px;
+  appearance: textfield;
   border-color: transparent;
   background: transparent;
   text-align: right;
@@ -1487,4 +1488,9 @@ input.cell.invalid {
   text-align: left;
   padding: 6px 0;
   color: var(--ink-2);
+}
+input.cell::-webkit-inner-spin-button,
+input.cell::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
 }

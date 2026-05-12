@@ -1,6 +1,6 @@
 import { PROCESS_PRESETS, VM_PRESETS } from "./presets.js";
 import { runSimulation } from "./run.js";
-import { $, MAX_PROCESSES, NAME_RE, colorFor, esc, icon, paint, resetColors, showNotification, state } from "./state.js";
+import { $, MAX_PROCESSES, MAX_TOTAL_BURST, NAME_RE, colorFor, esc, icon, paint, resetColors, showNotification, state } from "./state.js";
 
 let processCounter = 1;
 let autoProcessInterval = null;
@@ -66,6 +66,10 @@ $("processForm").addEventListener("submit", (e) => {
   }
   if (state.processes.length >= MAX_PROCESSES) {
     showNotification(`At most ${MAX_PROCESSES} processes are allowed.`, "error");
+    return;
+  }
+  if (state.processes.reduce((s, p) => s + p.burst, 0) + burst > MAX_TOTAL_BURST) {
+    showNotification(`Total burst time must be at most ${MAX_TOTAL_BURST}.`, "error");
     return;
   }
 
@@ -136,9 +140,9 @@ function editCell(input) {
   const [min, max] = FIELD_RANGE[input.dataset.field];
   const value = Number(input.value);
   const total = state.processes.reduce((s, q) => s + (q === p && input.dataset.field === "burst" ? value : q.burst), 0);
-  if (!p || input.value === "" || !Number.isInteger(value) || value < min || value > max || total > 20000) {
+  if (!p || input.value === "" || !Number.isInteger(value) || value < min || value > max || total > MAX_TOTAL_BURST) {
     input.classList.add("invalid");
-    showNotification(`${input.dataset.field} must be a whole number from ${min} to ${max} (total burst at most 20000).`, "error");
+    showNotification(`${input.dataset.field} must be a whole number from ${min} to ${max} (total burst at most ${MAX_TOTAL_BURST}).`, "error");
     input.value = p?.[input.dataset.field] ?? "";
     setTimeout(() => input.classList.remove("invalid"), 1500);
     return;
